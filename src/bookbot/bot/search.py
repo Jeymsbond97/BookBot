@@ -11,17 +11,28 @@ from __future__ import annotations
 
 import asyncio
 
-from ..models import SearchResult
 from .. import db
+from ..models import SearchResult
+from . import ranking
 
 PAGE_SIZE = 5
 
 
-async def search_page(query: str, page: int) -> tuple[list[SearchResult], bool]:
-    """Return (results_for_page, has_next_page) for a 0-indexed page number."""
+async def search_page(
+    query: str,
+    page: int,
+    fmt: str | None = None,
+    language: str | None = None,
+) -> tuple[list[SearchResult], bool]:
+    """Return (results_for_page, has_next_page) for a 0-indexed page number.
+
+    Results are filtered by ``fmt`` / ``language`` (None = no filter) and the
+    current page is re-ordered by fuzzy relevance for display.
+    """
     offset = page * PAGE_SIZE
     rows = await asyncio.to_thread(
-        db.search_books, query, PAGE_SIZE + 1, offset
+        db.search_books, query, PAGE_SIZE + 1, offset, fmt, language
     )
     has_next = len(rows) > PAGE_SIZE
-    return rows[:PAGE_SIZE], has_next
+    page_rows = ranking.rerank(query, rows[:PAGE_SIZE])
+    return page_rows, has_next

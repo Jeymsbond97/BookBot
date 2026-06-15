@@ -3,7 +3,7 @@
 > 🇺🇿 Bu fayl — qayerga kelganimiz va nima qolganini ko'rsatadi. Ertaga shu yerdan davom etamiz.
 > To'liq loyiha tavsifi: **README.md**. Bosqichlar ro'yxati: README §16 (Build Roadmap).
 
-_Last updated: 2026-06-15_
+_Last updated: 2026-06-16 (Phase 5 + variants/cards from user feedback done)_
 
 ---
 
@@ -24,6 +24,105 @@ _Last updated: 2026-06-15_
 - Files: `bot/handlers.py`, `bot/keyboards.py`, `bot/states.py`, `bot/texts.py`, `bot/main.py`.
 - Verified live in Telegram (@jeymsbooks_bot) — works ✅.
 
+### Phase 2 — DB search + pagination (DONE)
+- `rapidfuzz` added to `pyproject.toml` and installed in the venv.
+- `db.search_books()` now passes the `lang` + `fmt` filters the RPC expects (was
+  only sending `q/lim/off`). Results are filtered by the chosen format.
+- `bot/search.py` `search_page()` takes `fmt`/`language`, over-fetches `PAGE_SIZE+1`
+  to detect a next page, and re-ranks the page with `rapidfuzz`.
+- New `bot/ranking.py`: `best_exact()` (deliver a near-exact unique hit straight
+  away) + `rerank()` for display order.
+- Text query → search → either deliver the exact hit or show a numbered list with
+  ◀ / ▶ pagination (`results_keyboard`). Query + page kept in FSM.
+- New `bot/delivery.py`: sends PDF from Supabase Storage, then caches the Telegram
+  `file_id` so the next send is instant. (Audio + cross-format come in Phases 3–5.)
+- New `scripts/seed_test_book.py`: seeds one real valid-PDF test book (idempotent;
+  `--delete` to remove). One test book currently seeded: **"BookBot Test Kitob"**.
+- Verified headlessly: search (incl. fuzzy/typo) finds it, exact-match fires, mp3
+  filter correctly excludes the PDF-only book, and the PDF downloads from Storage
+  (`%PDF`, 590 bytes). 13 unit tests pass; ruff clean.
+  ⏳ _Still to confirm live in Telegram:_ tap a result → PDF arrives → `file_id`
+  gets cached (needs the running bot + a real chat).
+
+### Phase 3 — Cross-format fallback (DONE)
+- When the chosen format returns nothing, the bot re-searches **without** the format
+  filter (`search_page(..., fmt=None)`):
+  - **Single clear hit** → offers the format it actually has with ✅/❌ buttons
+    ("🎧 Audio topilmadi, lekin 📕 PDF bor. «…» — yuboraymi?") via `offer_keyboard`.
+  - **Several hits** → shows the normal numbered list with a note + format badges,
+    so the user picks knowingly. Pagination tracks a `cross_format` FSM flag so it
+    keeps searching without the filter.
+- `delivery.deliver_book()` now prefers the requested format and **falls back** to
+  whatever format the book has (caption emoji + audio/document send follow the
+  actual file format).
+- New: `OfferCB` + `offer_keyboard` (keyboards), `cross_format_offer()` /
+  `cross_format_list_note()` (texts), `on_offer_accept` handler.
+- Verified headlessly: Audio mode + "BookBot Test Kitob" (PDF-only) → `mp3` search
+  empty, unfiltered finds it, offer text renders correctly. 13 tests pass; ruff clean.
+  ⏳ _Live check:_ Audio mode → search the test book → accept the PDF offer.
+  (Reverse "offer audio" is fully testable once Phase 5 brings audio into the DB.)
+
+### Phase 4 — PDF web provider (DONE)
+- `ddgs` added to deps + installed. New `src/bookbot/providers/` package:
+  - `base.py` — `SourceProvider` protocol + normalized `FetchResult` dataclass.
+  - `pdf_web.py` — `fetch(title, language)`: DuckDuckGo `"<title>" filetype:pdf`
+    search (keyless) → download each candidate size-capped at `MAX_FILE_MB` →
+    validate (`%PDF` magic + content-type) → return first valid. Network errors on
+    a candidate just skip to the next; retries once without quotes.
+- `db.save_pdf_book()` — uploads bytes to Storage (`web/<book_id>.pdf`) + inserts
+  book/file rows, **dedupes by (title, language)** so a re-fetch reuses the entry.
+  (Uses the real schema columns directly — not the legacy `upsert_book`.)
+- Wired into `handlers._try_web_pdf`: when the DB (filtered **and** unfiltered) has
+  nothing → search the web. PDF mode delivers it directly; Audio mode offers it
+  ("internetdan PDF topdim — yuboraymi?"). Saved PDFs are now cached for next time.
+- Verified end-to-end headlessly: fetched a real 3.8 MB public-domain PDF from the
+  web, saved to Storage + catalog, confirmed searchable + re-downloadable (bytes
+  match), then cleaned up. 17 tests pass; new code ruff clean.
+  ⏳ _Live check:_ PDF mode → search a title NOT in the DB → PDF arrives from the
+  web AND a second search is now instant (served from DB).
+
+### Phase 5 — YouTube audio provider (DONE)
+- `yt-dlp` added to deps + installed. New `providers/youtube_audio.py`:
+  - `search_candidates(query)` — `ytsearchN:<query> audiokitob` (flat = fast),
+    filters by sane duration, returns video candidates (id, title, duration, uploader).
+  - `download_audio(video_id, workdir, max_bytes, bitrate)` — downloads best audio,
+    **one explicit ffmpeg pass → mono + 48 kbps MP3** (guaranteed mono — the yt-dlp
+    postprocessor left it stereo), then **splits into part_000/001/… if over the cap**
+    (ffmpeg segment, `-c copy`, drops empty tail segments).
+  - Verified live: "O'tkan kunlar" → 42-min candidate → 14.65 MB **mono** mp3; split
+    logic tested with synthetic files (even parts, all under cap).
+- Audio is NOT stored; `db.save_audio_book()` keeps a book row + `book_files` row with
+  `youtube_id` + **comma-joined Telegram file_ids** (multi-part cache, no storage).
+- `delivery.send_audio_parts()` sends parts labelled 1/N…; `deliver_book` re-sends
+  cached audio by splitting the joined file_ids.
+
+### Variants + detail cards + metadata (from user feedback — DONE)
+Addresses the 4 issues raised after testing:
+1. **YouTube wasn't searched** → audio mode now searches YouTube on a DB miss.
+2. **PDF grabbed junk (a presentation)** → web PDF now returns **multiple ranked,
+   domain-deduped variants** (min-size filter drops slide decks); the user picks.
+3. **Show all variants** → both PDF and audio show a numbered variant list
+   (source site / duration shown); user chooses.
+4. **Book description + design** → new `providers/metadata.py` (OpenLibrary, keyless)
+   + `bot/cards.py`: after picking a result/variant, a **detail card** is shown —
+   cover image + title + author + 🏷 type + 🌐 language + ⏱ duration (audio) +
+   description — then a **📥 Yuborish** button delivers it. Works for DB books and
+   internet variants; description/cover are saved to the catalog.
+- New callbacks: `CardCB` (open card) + `SendCB` (confirm). Flow:
+  search → variant/result list → pick → card → 📥 → download (if needed) + deliver + save.
+- 16 unit tests pass (candidate ranking, language priority, card rendering, duration
+  formatting); ruff clean. Live-verified data layer (save audio/pdf + metadata +
+  mp3 search) end-to-end.
+  ⏳ _Live check needed in Telegram (restart bot first):_ audio search → variant list →
+  card → 📥 → audio arrives (split if long); PDF search of a non-DB title → variants →
+  card → PDF arrives + 2nd search instant.
+
+### Cleanup (DONE)
+- Removed dead v1 ingestion code (`src/bookbot/ingest/`, `tests/test_ingest.py`,
+  `bookbot-ingest` script) and the broken v1 `db.upsert_book*` (used a non-existent
+  `source_id` column). `models.Book` removed; `BookFile.storage_path` now optional.
+  Lint is now clean across the whole tree.
+
 ### Key decisions locked in
 - **PDF search = DuckDuckGo (`ddgs`), keyless.** (Google PSE dropped whole-web search in 2026 — dropped.)
 - **Audio = YouTube via `yt-dlp` + `ffmpeg`, keyless.** Audio files are NOT stored; only a Telegram
@@ -35,26 +134,21 @@ _Last updated: 2026-06-15_
 
 ## 🔜 What's left (next sessions)
 
-- **Phase 2 — DB search + pagination** ← _START HERE TOMORROW_
-  - Wire `search_books()` RPC into the bot: text query → ranked results, filtered by chosen format.
-  - Exact-match shortcut + paginated fuzzy list (◀ 1 2 3 ▶) using `rapidfuzz` for ranking.
-  - Deliver PDF from Supabase Storage with `telegram_file_id` caching.
-  - (We currently have 0 books in DB — may add a couple of test PDFs via admin upload or a seed to test.)
-- **Phase 3 — Cross-format fallback** (chosen format missing → offer the other).
-- **Phase 4 — PDF web provider** (`ddgs` `filetype:pdf` → download → `%PDF` validation → save & cache).
-- **Phase 5 — YouTube audio provider** (`yt-dlp` search/download + `ffmpeg` compress → send → cache
-  file_id; handle >50 MB via split or self-hosted Bot API server).
-- **Phase 6 — Categories & language** (browse by category listing; uz/en filtering).
+- **Phase 6 — Categories & language** ← _START HERE NEXT_ (browse by category listing; uz/en filtering).
 - **Phase 7 — Admin uploads** (admin sends a PDF → tag title/author/category/language → store).
 - **Phase 8 — Polish & deploy** (tests, rate-limit/anti-abuse, logging, Docker, optional Bot API server).
 
-### Dependencies still to add (when their phase starts)
-- `ddgs` (Phase 4), `yt-dlp` (Phase 5), `rapidfuzz` (Phase 2) → add to `pyproject.toml` `dependencies`.
+### Dependencies — all added
+- ✅ `rapidfuzz` (Phase 2), `ddgs` (Phase 4), `yt-dlp` (Phase 5). `ffmpeg`+`ffprobe` installed.
+- Metadata uses OpenLibrary via `httpx` (no new dep). Google Books was dropped (anonymous 429s).
 
-### Cleanup note
-- Original v1 ingestion code (`src/bookbot/ingest/gutenberg.py`, `librivox.py`, `cli.py`, `storage.py`)
-  and `bot/search.py` are leftovers from the first design. They'll be replaced/removed as Phases 2–5
-  build the new providers. Not used by the running bot.
+### Notes
+- Dead v1 ingestion code + broken `db.upsert_book*` have been **removed** (see Cleanup above).
+  Writes now go through `db.save_pdf_book` / `db.save_audio_book`, which use the real schema.
+- Metadata (cover + description) is best-effort: Uzbek titles often lack a cover/description on
+  OpenLibrary, so the card degrades gracefully (no cover → text card; no description → just metadata).
+- Long audiobooks are split into parts (50 MB cap). Optional future upgrade: self-hosted Telegram
+  Bot API server raises the cap to 2 GB (Phase 8) so big audio sends as one file.
 
 ---
 

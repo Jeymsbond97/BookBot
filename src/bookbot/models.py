@@ -1,34 +1,23 @@
-"""Data models shared across the bot and ingestion code."""
+"""Data models used by the bot and the catalog layer."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(slots=True)
 class BookFile:
-    """A single downloadable file belonging to a book."""
+    """A single file belonging to a book.
 
-    format: str  # 'pdf' | 'epub' | 'mp3'
-    storage_path: str
+    ``storage_path`` is set for PDFs (Supabase Storage); audio files are not
+    stored, so it is ``None`` for mp3 and only ``telegram_file_id`` is kept.
+    """
+
+    format: str  # 'pdf' | 'mp3'
+    storage_path: str | None = None
     size_bytes: int | None = None
     telegram_file_id: str | None = None
     id: str | None = None
-
-
-@dataclass(slots=True)
-class Book:
-    """A catalog entry, optionally with its files attached."""
-
-    title: str
-    source: str  # 'gutenberg' | 'librivox' | 'archive'
-    source_id: str
-    author: str | None = None
-    language: str = "en"
-    description: str | None = None
-    cover_url: str | None = None
-    id: str | None = None
-    files: list[BookFile] = field(default_factory=list)
 
 
 @dataclass(slots=True)
