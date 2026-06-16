@@ -302,7 +302,9 @@ async def _send_web_pdf(message: Message, state: FSMContext, index: int) -> None
     order = [index] + [i for i in range(len(cands)) if i != index]
     content, used = None, None
     for i in order[:5]:
-        content = await asyncio.to_thread(pdf_web.download_validate, cands[i]["url"], max_bytes)
+        content = await asyncio.to_thread(
+            pdf_web.download_validate, cands[i]["url"], max_bytes, query
+        )
         if content is not None:
             used = cands[i]
             break

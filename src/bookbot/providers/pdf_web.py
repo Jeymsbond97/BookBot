@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
@@ -54,7 +55,14 @@ def _with_referer(url: str) -> dict:
 # Reliable free book sites — we run a site-restricted query for each so the actual
 # *book page* surfaces (general queries tend to return their category/home pages),
 # and we know how to extract the PDF from them.
-_RELIABLE_SITES = ("mykitob.uz", "kitobxon.com")
+_RELIABLE_SITES = (
+    "mykitob.uz",
+    "kitobxon.com",
+    "ziyouz.com",
+    "n.ziyouz.com",
+    "qr.natlib.uz",
+    "unilibrary.uz",
+)
 
 
 def _queries(title: str) -> list[str]:
@@ -78,7 +86,8 @@ _BLOCKED = (
 # Known free Uzbek e-book sites — ranked first when present.
 _FREE_BOOST = (
     "mykitob.uz", "pdfbox.uz", "mutolaa.com", "kitobxon.com", "kitobxon.uz",
-    "ziyouz.com", "n.ziyonet.uz", "ziyonet.uz", "kitoblar", "ekitob", "e-kitob",
+    "ziyouz.com", "n.ziyouz.com", "ziyonet.uz", "n.ziyonet.uz", "qr.natlib.uz",
+    "natlib.uz", "unilibrary.uz", "kitoblar", "ekitob", "e-kitob",
     "asaxiykutubxona", "kutubxona", "oasap.uz", "uzbekkino",
 )
 
@@ -114,9 +123,13 @@ def _clean_title(raw: str, fallback: str) -> str:
 
 def search_candidates(title: str, language: str = "uz", limit: int = 6) -> list[PdfCandidate]:
     """Return ranked, domain-deduped candidate pages likely to host a free PDF."""
+    queries = _queries(title)
+    # Run the queries concurrently so adding more reliable sites doesn't slow the
+    # search down (capped concurrency to stay friendly with DuckDuckGo).
     raw: list[dict] = []
-    for q in _queries(title):
-        raw += _raw_search(q, 6)
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        for res in ex.map(lambda q: _raw_search(q, 6), queries):
+            raw += res
 
     best_by_domain: dict[str, tuple[float, PdfCandidate]] = {}
     for item in raw:
@@ -146,8 +159,12 @@ _DL_HREF_RE = re.compile(
 )
 
 
-def _pdf_links_on_page(page_url: str, html: str) -> list[str]:
-    """Extract likely PDF/download links from a page, most-specific first."""
+def _pdf_links_on_page(page_url: str, html: str, title: str | None = None) -> list[str]:
+    """Extract likely PDF/download links from a page, most-specific first.
+
+    When ``title`` is given and the page lists many books (e.g. a category page),
+    links whose URL slug matches the searched title are tried first.
+    """
     out: list[str] = []
     for href in _PDF_HREF_RE.findall(html):
         out.append(urljoin(page_url, href))
@@ -163,6 +180,13 @@ def _pdf_links_on_page(page_url: str, html: str) -> list[str]:
         if u not in seen:
             seen.add(u)
             uniq.append(u)
+
+    if title:  # float links whose slug matches the searched title (category pages)
+        words = [w for w in re.split(r"\W+", title.lower()) if len(w) > 2]
+        def slug_score(u: str) -> int:
+            low = u.lower()
+            return sum(1 for w in words if w in low)
+        uniq.sort(key=slug_score, reverse=True)
     return uniq
 
 
@@ -206,7 +230,7 @@ def _fetch_html(url: str) -> str | None:
     return None
 
 
-def download_validate(url: str, max_bytes: int) -> bytes | None:
+def download_validate(url: str, max_bytes: int, title: str | None = None) -> bytes | None:
     """Get a real PDF from ``url`` — directly, or by extracting it from the page."""
     # 1) Maybe the url is the PDF itself.
     direct = _try_download(url, max_bytes)
@@ -217,7 +241,7 @@ def download_validate(url: str, max_bytes: int) -> bytes | None:
     html = _fetch_html(url)
     if not html:
         return None
-    for link in _pdf_links_on_page(url, html)[:6]:
+    for link in _pdf_links_on_page(url, html, title)[:6]:
         data = _try_download(link, max_bytes)
         if data is not None:
             return data
