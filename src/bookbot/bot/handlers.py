@@ -292,14 +292,21 @@ async def _send_web_pdf(message: Message, state: FSMContext, index: int) -> None
     cands = data.get("candidates") or []
     if not (0 <= index < len(cands)) or data.get("cand_kind") != "pdf":
         return
-    cand = cands[index]
-    query = data.get("query", cand["title"])
+    query = data.get("query", cands[index]["title"])
+    max_bytes = get_settings().max_file_bytes
     language = get_settings().default_language
 
     status = await message.answer(texts.DOWNLOADING_PDF)
-    content = await asyncio.to_thread(
-        pdf_web.download_validate, cand["url"], get_settings().max_file_bytes
-    )
+    # Try the picked candidate first, then fall through to the others — so the user
+    # still gets a free PDF even if their pick is a dead/blocked link.
+    order = [index] + [i for i in range(len(cands)) if i != index]
+    content, used = None, None
+    for i in order[:5]:
+        content = await asyncio.to_thread(pdf_web.download_validate, cands[i]["url"], max_bytes)
+        if content is not None:
+            used = cands[i]
+            break
+
     if content is None:
         await status.edit_text(texts.DOWNLOAD_FAILED)
         return
@@ -312,7 +319,7 @@ async def _send_web_pdf(message: Message, state: FSMContext, index: int) -> None
         author=meta.author_str if meta else None,
         language=(meta.language if meta and meta.language else language),
         source="web",
-        source_ref=cand["url"],
+        source_ref=used["url"],
         description=meta.description if meta else None,
         cover_url=meta.cover_url if meta else None,
     )

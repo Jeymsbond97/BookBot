@@ -123,6 +123,30 @@ Addresses the 4 issues raised after testing:
   `source_id` column). `models.Book` removed; `BookFile.storage_path` now optional.
   Lint is now clean across the whole tree.
 
+### Search-quality + reliability fixes (2026-06-16, after live testing)
+- **Bug:** raw `InlineKeyboardButton(callback_data=CB(...))` (back/pagination) crashed
+  every list build (needs `.pack()`) → user saw a frozen "searching…". Fixed + added
+  a global `@router.error` handler + `tests/test_keyboards.py` regression guard.
+- **Audio upload timeout:** raised Telegram request timeout 60s → 600s
+  (`request_timeout_seconds`); audio now split into smaller ~20 MB parts
+  (`audio_part_mb`) for reliable uploads on slow links.
+- **PDF search overhaul** (`providers/pdf_web.py`) — the big one. `"<title>" filetype:pdf`
+  returned paid stores (uzum/asaxiy) + junk and missed free Uzbek PDFs (which sit behind
+  download pages, not direct `.pdf` URLs). Now:
+  - Discovery = **site-restricted queries** for reliable free sites (mykitob.uz,
+    kitobxon.com) + general "pdf yuklab olish" queries, so the actual *book page* surfaces.
+  - **Blocklist** paid/news/PDF-tool/aggregator domains; **boost** known free book sites;
+    rank by title similarity; dedupe by domain.
+  - `download_validate` fetches the page HTML and **extracts the real PDF link**
+    (direct `.pdf` OR download-monitor `/download/NNN/`), using **browser headers +
+    Referer** (fixes 403s). Validates `%PDF` + size.
+  - Confirm handler **falls through candidates** — if the picked link is dead/blocked,
+    auto-tries the others so the user still gets a free PDF.
+  - Verified live: ityurak → mykitob.uz 912 KB; Mehrobdan chayon → mykitob 3.1 MB;
+    Sariq devni minib → ziyonet 9.7 MB. All real free book PDFs ✅.
+- ⏳ Known limit: some sites block bots (captcha/JS) — the fall-through handles it by
+  trying other candidates. Coverage is good but not 100%.
+
 ### Key decisions locked in
 - **PDF search = DuckDuckGo (`ddgs`), keyless.** (Google PSE dropped whole-web search in 2026 — dropped.)
 - **Audio = YouTube via `yt-dlp` + `ffmpeg`, keyless.** Audio files are NOT stored; only a Telegram
