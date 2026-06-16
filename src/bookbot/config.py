@@ -19,8 +19,14 @@ class Settings(BaseSettings):
     default_language: str = "uz"
     audio_bitrate_kbps: int = 48
     max_file_mb: int = 50
+    # Target size per audio part. Smaller than the 50 MB Telegram cap so each part
+    # uploads quickly/reliably on a slow link (long audiobooks → more, smaller parts).
+    audio_part_mb: int = 20
     cache_audio_file_id: bool = True
     ingest_delay_seconds: float = 1.0
+    # Telegram request timeout (seconds) — big enough to upload large audio parts
+    # over a slow connection without aborting.
+    request_timeout_seconds: float = 600.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

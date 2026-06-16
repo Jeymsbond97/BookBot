@@ -7,6 +7,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 
@@ -18,8 +19,12 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO)
     settings = get_settings()
 
+    # Uploading audio (tens of MB) over a slow link can take minutes — the default
+    # 60s request timeout would abort it, so give file transfers plenty of room.
+    session = AiohttpSession(timeout=settings.request_timeout_seconds)
     bot = Bot(
         token=settings.telegram_bot_token,
+        session=session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=MemoryStorage())

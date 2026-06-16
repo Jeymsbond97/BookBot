@@ -141,5 +141,6 @@ DOWNLOADING_AUDIO = (
     "📥 Audio yuklanyapti va siqilyapti… bu biroz vaqt oladi (1–3 daqiqa), kuting ⏳"
 )
 DOWNLOAD_FAILED = "⚠️ Yuklab bo'lmadi — bu variant ishlamadi. Boshqasini tanlab ko'ring."
+ERROR_GENERIC = "⚠️ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring yoki /start bosing."
 AUDIO_PARTS_NOTE = "📚 Audio katta — qismlarga bo'lib yuboraman:"
 NO_VARIANTS = "🔍 Internetdan ham hech narsa topilmadi. Boshqacha yozib ko'ring."

@@ -24,7 +24,7 @@ from pathlib import Path
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, ErrorEvent, Message
 
 from .. import db
 from ..config import get_settings
@@ -53,6 +53,29 @@ log = logging.getLogger(__name__)
 router = Router()
 
 _FORMAT_MSG = {"pdf": texts.FORMAT_CHOSEN_PDF, "mp3": texts.FORMAT_CHOSEN_AUDIO}
+
+
+# ── Global error handler ──────────────────────────────────────────────────────
+@router.error()
+async def on_error(event: ErrorEvent) -> None:
+    """Never leave the user staring at a 'searching…' message: on any unhandled
+    exception, log it and reply with a friendly error instead of hanging."""
+    log.exception("Unhandled handler error: %s", event.exception)
+    upd = event.update
+    target = None
+    if upd.message:
+        target = upd.message
+    elif upd.callback_query and upd.callback_query.message:
+        target = upd.callback_query.message
+        try:
+            await upd.callback_query.answer()
+        except Exception:
+            pass
+    if target:
+        try:
+            await target.answer(texts.ERROR_GENERIC)
+        except Exception:
+            pass
 
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -309,9 +332,12 @@ async def _send_youtube(message: Message, state: FSMContext, index: int) -> None
     status = await message.answer(texts.DOWNLOADING_AUDIO)
     workdir = Path(tempfile.mkdtemp(prefix="bookbot_audio_"))
     try:
+        # Split into ~audio_part_mb chunks (<= the 50 MB Telegram cap) so each
+        # part uploads reliably.
+        part_bytes = min(settings.audio_part_mb, settings.max_file_mb) * 1024 * 1024
         parts = await asyncio.to_thread(
             youtube_audio.download_audio,
-            cand["video_id"], workdir, settings.max_file_bytes, settings.audio_bitrate_kbps,
+            cand["video_id"], workdir, part_bytes, settings.audio_bitrate_kbps,
         )
         if not parts:
             await status.edit_text(texts.DOWNLOAD_FAILED)

@@ -80,7 +80,8 @@ def categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
     for c in categories:
         kb.button(text=c["name_uz"], callback_data=CategoryCB(slug=c["slug"]))
     kb.adjust(2)
-    kb.row(InlineKeyboardButton(text=texts.BTN_BACK, callback_data=MenuCB(action="change_format")))
+    kb.row(InlineKeyboardButton(text=texts.BTN_BACK,
+                                callback_data=MenuCB(action="change_format").pack()))
     return kb.as_markup()
 
 
@@ -100,13 +101,14 @@ def results_keyboard(book_ids: list[str], page: int, has_next: bool) -> InlineKe
 
     nav: list[InlineKeyboardButton] = []
     if page > 0:
-        nav.append(InlineKeyboardButton(text="◀️", callback_data=PageCB(page=page - 1)))
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=PageCB(page=page - 1).pack()))
     if has_next:
-        nav.append(InlineKeyboardButton(text="▶️", callback_data=PageCB(page=page + 1)))
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=PageCB(page=page + 1).pack()))
     if nav:
         kb.row(*nav)
 
-    kb.row(InlineKeyboardButton(text=texts.BTN_BACK, callback_data=MenuCB(action="back_to_menu")))
+    kb.row(InlineKeyboardButton(text=texts.BTN_BACK,
+                                callback_data=MenuCB(action="back_to_menu").pack()))
     return kb.as_markup()
 
 
@@ -125,7 +127,8 @@ def candidates_keyboard(kind: str, count: int) -> InlineKeyboardMarkup:
     for i in range(count):
         kb.button(text=str(i + 1), callback_data=CardCB(kind=kind, ref=str(i)))
     kb.adjust(5)
-    kb.row(InlineKeyboardButton(text=texts.BTN_BACK, callback_data=MenuCB(action="back_to_menu")))
+    kb.row(InlineKeyboardButton(text=texts.BTN_BACK,
+                                callback_data=MenuCB(action="back_to_menu").pack()))
     return kb.as_markup()
 
 
