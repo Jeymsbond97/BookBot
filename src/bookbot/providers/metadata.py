@@ -89,8 +89,15 @@ def _fetch_description(work_key: str) -> str | None:
     return None
 
 
-def lookup(title: str, author: str | None = None) -> BookMeta | None:
-    """Look up metadata for ``title`` (optionally ``author``). None if nothing."""
+def lookup(
+    title: str, author: str | None = None, *, with_description: bool = True
+) -> BookMeta | None:
+    """Look up metadata for ``title`` (optionally ``author``). None if nothing.
+
+    ``with_description=False`` skips the second (work-detail) HTTP call — use it when
+    the description will come from elsewhere (e.g. OpenAI), so the lookup is a single
+    fast request for cover + language.
+    """
     query = f"{title} {author}".strip() if author else title
     try:
         r = httpx.get(
@@ -116,7 +123,9 @@ def lookup(title: str, author: str | None = None) -> BookMeta | None:
 
     language = _pick_language(doc.get("language") or [])
     cover_url = _COVER_URL.format(cover_id=doc["cover_i"]) if doc.get("cover_i") else None
-    description = _fetch_description(doc["key"]) if doc.get("key") else None
+    description = (
+        _fetch_description(doc["key"]) if (with_description and doc.get("key")) else None
+    )
 
     return BookMeta(
         title=doc.get("title") or title,

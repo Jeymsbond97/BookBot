@@ -395,15 +395,9 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
             return
         description, cover_url = book.get("description"), book.get("cover_url")
         author, language, genre = book.get("author"), book.get("language"), None
-        if not description or not cover_url:  # enrich from OpenLibrary (best-effort)
-            meta = await asyncio.to_thread(metadata.lookup, book["title"], author)
-            if meta:
-                description = description or meta.description
-                cover_url = cover_url or meta.cover_url
-                language = language or meta.language
-                author = author or meta.author_str
-                genre = meta.genre
-        description, genre = await _ai_fill(book["title"], author, description, genre)
+        description, cover_url, genre, language, author = await _enrich(
+            book["title"], author, description=description, cover_url=cover_url,
+            genre=genre, language=language)
         if description and not book.get("description"):  # persist for next time
             await asyncio.to_thread(db.update_book_meta, ref, description=description,
                                     cover_url=cover_url)
@@ -431,14 +425,8 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
         desc = pmeta.description if pmeta else None
         genre = pmeta.genre if pmeta else None
         author = pmeta.author_str if pmeta else None
-        language = "uz"
-        if not (cover and desc):  # page lacked metadata → OpenLibrary fallback
-            ol = await asyncio.to_thread(metadata.lookup, title)
-            if ol:
-                cover, desc = cover or ol.cover_url, desc or ol.description
-                author, genre = author or ol.author_str, genre or ol.genre
-                language = ol.language or language
-        desc, genre = await _ai_fill(title, author, desc, genre)
+        desc, cover, genre, language, author = await _enrich(
+            title, author, description=desc, cover_url=cover, genre=genre, language="uz")
         cand["meta"] = {"author": author, "language": language,
                         "description": desc, "cover_url": cover}
         cands[idx] = cand
@@ -456,16 +444,12 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
             return
         cand = cands[idx]
         title = query or cand["title"]
-        meta = await asyncio.to_thread(metadata.lookup, title)
-        author = meta.author_str if meta else cand.get("uploader")
-        desc = meta.description if meta else None
-        genre = meta.genre if meta else None
-        desc, genre = await _ai_fill(title, author, desc, genre)
+        desc, cover, genre, language, author = await _enrich(
+            title, cand.get("uploader"))
         card = cards.build_card(
-            title=title, fmt="mp3", author=author,
-            language=(meta.language if meta else None),
-            description=desc, cover_url=(meta.cover_url if meta else None),
-            genre=genre, duration=cand.get("duration_str"),
+            title=title, fmt="mp3", author=author, language=language,
+            description=desc, cover_url=cover, genre=genre,
+            duration=cand.get("duration_str"),
         )
 
     kb = card_keyboard(kind, ref)
@@ -484,16 +468,31 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-async def _ai_fill(title: str, author: str | None, description: str | None,
-                   genre: str | None) -> tuple[str | None, str | None]:
-    """Fill a missing description/genre with OpenAI (cached). No-op if both present."""
-    if description and genre:
-        return description, genre
-    ai = await asyncio.to_thread(ai_meta.lookup, title, author)
+async def _enrich(title, author, *, description=None, cover_url=None, genre=None,
+                  language=None):
+    """Fill gaps: cover/language from OpenLibrary, description/genre from OpenAI —
+    run concurrently (so the card isn't slowed by two sequential network calls).
+    Returns (description, cover_url, genre, language, author)."""
+    want_ol = (not cover_url) or (not language) or (not author)
+    want_ai = (not description) or (not genre)
+    ol = ai = None
+    if want_ol and want_ai:
+        ol, ai = await asyncio.gather(
+            asyncio.to_thread(metadata.lookup, title, author, with_description=False),
+            asyncio.to_thread(ai_meta.lookup, title, author),
+        )
+    elif want_ol:
+        ol = await asyncio.to_thread(metadata.lookup, title, author, with_description=False)
+    elif want_ai:
+        ai = await asyncio.to_thread(ai_meta.lookup, title, author)
+    if ol:
+        cover_url = cover_url or ol.cover_url
+        language = language or ol.language
+        author = author or ol.author_str
     if ai:
         description = description or ai.description
         genre = genre or ai.genre
-    return description, genre
+    return description, cover_url, genre, language, author
 
 
 async def _render_results(message: Message, query: str, page: int, results, has_next,

@@ -136,12 +136,13 @@ def download_audio(
     Returns an empty list on failure.
     """
     workdir = Path(workdir)
-    # 1) Download the best audio track as-is (let yt-dlp pick container).
+    # 1) Download a small audio track (prefer low-bitrate so it often needs no
+    #    re-encode at all — transcoding hours of audio is the slowest step).
     opts = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "format": "bestaudio/best",
+        "format": "bestaudio[abr<=72]/bestaudio/best",
         "outtmpl": str(workdir / "source.%(ext)s"),
     }
     try:
@@ -156,20 +157,24 @@ def download_audio(
         return []
     source = sources[0]
 
-    # 2) One ffmpeg pass → mono, low-bitrate MP3 (guaranteed mono + target kbps).
+    # 2) FAST PATH: if the download is already small enough and in a Telegram-
+    #    friendly audio container, send it as-is — skip the ffmpeg re-encode.
+    if source.suffix.lower() in (".m4a", ".mp3", ".aac") and source.stat().st_size <= max_bytes:
+        return [source]
+
+    # 3) Otherwise compress hard (mono, low-bitrate MP3) and split if still big.
     audio = workdir / "audio.mp3"
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-i", str(source), "-vn", "-ac", "1",
              "-b:a", f"{bitrate_kbps}k", str(audio)],
-            capture_output=True, timeout=1200, check=True,
+            capture_output=True, timeout=1800, check=True,
         )
     except Exception:
         log.warning("ffmpeg compress failed for %s", video_id, exc_info=True)
         return []
     source.unlink(missing_ok=True)
 
-    # 3) Split if still over the cap.
     if audio.stat().st_size <= max_bytes:
         return [audio]
     parts = _split(audio, workdir, max_bytes)

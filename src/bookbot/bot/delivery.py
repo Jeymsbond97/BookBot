@@ -127,8 +127,9 @@ async def send_audio_parts(
     file_ids: list[str] = []
     for i, path in enumerate(paths, 1):
         part_title = title if total == 1 else f"{title} — {i}/{total}"
+        ext = path.suffix.lstrip(".").lower() or "mp3"
         sent = await message.answer_audio(
-            FSInputFile(str(path), filename=_safe_filename(part_title, "mp3")),
+            FSInputFile(str(path), filename=_safe_filename(part_title, ext)),
             title=part_title,
             performer=performer,
         )

@@ -122,7 +122,7 @@ def pdf_variants_header(query: str) -> str:
 def youtube_variants_header(query: str) -> str:
     return (
         f"🎧 “{query}” bo'yicha YouTube'da topildi.\n"
-        "Quyidagilardan birini tanlang 👇"
+        "Birini tanlang — <i>yuklab olish biroz vaqt oladi (uzun audio bo'lsa bir necha daqiqa)</i> 👇"
     )
 
 
