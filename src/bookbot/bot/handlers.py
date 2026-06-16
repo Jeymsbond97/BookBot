@@ -28,7 +28,7 @@ from aiogram.types import CallbackQuery, ErrorEvent, Message
 
 from .. import db
 from ..config import get_settings
-from ..providers import metadata, pdf_web, youtube_audio
+from ..providers import ai_meta, metadata, pdf_web, youtube_audio
 from . import cards, delivery, ranking, texts
 from .keyboards import (
     CardCB,
@@ -403,6 +403,10 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
                 language = language or meta.language
                 author = author or meta.author_str
                 genre = meta.genre
+        description, genre = await _ai_fill(book["title"], author, description, genre)
+        if description and not book.get("description"):  # persist for next time
+            await asyncio.to_thread(db.update_book_meta, ref, description=description,
+                                    cover_url=cover_url)
         card = cards.build_card(
             title=book["title"], fmt=fmt, author=author, language=language,
             description=description, cover_url=cover_url, genre=genre,
@@ -434,6 +438,7 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
                 cover, desc = cover or ol.cover_url, desc or ol.description
                 author, genre = author or ol.author_str, genre or ol.genre
                 language = ol.language or language
+        desc, genre = await _ai_fill(title, author, desc, genre)
         cand["meta"] = {"author": author, "language": language,
                         "description": desc, "cover_url": cover}
         cands[idx] = cand
@@ -452,14 +457,15 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
         cand = cands[idx]
         title = query or cand["title"]
         meta = await asyncio.to_thread(metadata.lookup, title)
+        author = meta.author_str if meta else cand.get("uploader")
+        desc = meta.description if meta else None
+        genre = meta.genre if meta else None
+        desc, genre = await _ai_fill(title, author, desc, genre)
         card = cards.build_card(
-            title=title, fmt="mp3",
-            author=(meta.author_str if meta else cand.get("uploader")),
+            title=title, fmt="mp3", author=author,
             language=(meta.language if meta else None),
-            description=(meta.description if meta else None),
-            cover_url=(meta.cover_url if meta else None),
-            genre=(meta.genre if meta else None),
-            duration=cand.get("duration_str"),
+            description=desc, cover_url=(meta.cover_url if meta else None),
+            genre=genre, duration=cand.get("duration_str"),
         )
 
     kb = card_keyboard(kind, ref)
@@ -478,6 +484,18 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+async def _ai_fill(title: str, author: str | None, description: str | None,
+                   genre: str | None) -> tuple[str | None, str | None]:
+    """Fill a missing description/genre with OpenAI (cached). No-op if both present."""
+    if description and genre:
+        return description, genre
+    ai = await asyncio.to_thread(ai_meta.lookup, title, author)
+    if ai:
+        description = description or ai.description
+        genre = genre or ai.genre
+    return description, genre
+
+
 async def _render_results(message: Message, query: str, page: int, results, has_next,
                           note: str | None = None) -> None:
     """Edit ``message`` to show the numbered results list + pagination keyboard."""

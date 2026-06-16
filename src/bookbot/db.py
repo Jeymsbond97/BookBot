@@ -211,6 +211,16 @@ def save_audio_book(
     return book_id
 
 
+def update_book_meta(
+    book_id: str, *, description: str | None = None, cover_url: str | None = None
+) -> None:
+    """Backfill description / cover on an existing book (only non-empty values)."""
+    updates = {k: v for k, v in {"description": description, "cover_url": cover_url}.items() if v}
+    if not updates:
+        return
+    get_client().table("books").update(updates).eq("id", book_id).execute()
+
+
 def get_book(book_id: str) -> dict | None:
     """Return a book row (title/author/language/description/cover) by id, or None."""
     client = get_client()

@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     supabase_service_key: str
     supabase_bucket: str = "books"
 
+    # OpenAI — generates Uzbek book descriptions + genre when web/OpenLibrary lack them.
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+
     # Behaviour / tuning.
     default_language: str = "uz"
     audio_bitrate_kbps: int = 48

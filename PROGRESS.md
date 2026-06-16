@@ -166,6 +166,22 @@ Addresses the 4 issues raised after testing:
   ⏳ Author is best-effort (only a visible "Muallif:" label is trusted — avoids JSON-LD
   garbage); often absent for Uzbek pages.
 
+### AI descriptions via OpenAI (2026-06-16)
+- Web/OpenLibrary lack descriptions for Uzbek books, so descriptions/genre now come
+  from **OpenAI GPT** (`providers/ai_meta.py`, `gpt-4o-mini`, ~$0.00003/book). It
+  returns a 1–2 sentence Uzbek description + genre, refuses to hallucinate for
+  non-books (returns null), and is `lru_cache`d per process.
+- `_ai_fill()` in handlers fills a missing description/genre on every card (DB / PDF /
+  audio), preferring real scraped/DB data and falling back to AI. New AI descriptions
+  are persisted to the catalog (`db.update_book_meta`), so a book is described once.
+- Config: `OPENAI_API_KEY` + `OPENAI_MODEL` (in `.env`, gitignored; documented in
+  `.env.example`). `openai` added to deps.
+- `scripts/backfill_descriptions.py` — one-off: fills descriptions for existing books
+  that lack one. Ran it: 3/6 real books described (test/junk entries correctly skipped).
+- Note: covers are still best-effort (an LLM can't supply a real cover image) — they
+  come from the book page's og:image or OpenLibrary when available.
+- ⚠️ The OpenAI key was pasted in chat — user should rotate it.
+
 ### Key decisions locked in
 - **PDF search = DuckDuckGo (`ddgs`), keyless.** (Google PSE dropped whole-web search in 2026 — dropped.)
 - **Audio = YouTube via `yt-dlp` + `ffmpeg`, keyless.** Audio files are NOT stored; only a Telegram
