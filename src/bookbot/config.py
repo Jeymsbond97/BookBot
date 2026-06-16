@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Telegram request timeout (seconds) — big enough to upload large audio parts
     # over a slow connection without aborting.
     request_timeout_seconds: float = 600.0
+    # Optional proxy for reaching Telegram when it's blocked on the network
+    # (e.g. "socks5://127.0.0.1:1080" or "http://user:pass@host:port"). Empty = direct.
+    telegram_proxy: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
