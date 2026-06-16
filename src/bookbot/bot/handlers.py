@@ -294,36 +294,42 @@ async def _send_web_pdf(message: Message, state: FSMContext, index: int) -> None
         return
     query = data.get("query", cands[index]["title"])
     max_bytes = get_settings().max_file_bytes
-    language = get_settings().default_language
+    default_lang = get_settings().default_language
 
     status = await message.answer(texts.DOWNLOADING_PDF)
-    # Try the picked candidate first, then fall through to the others — so the user
-    # still gets a free PDF even if their pick is a dead/blocked link.
-    order = [index] + [i for i in range(len(cands)) if i != index]
+    # The card step already resolved the picked candidate's PDF link(s); reuse them
+    # (fast — no second page fetch). Then fall through to other candidates so the
+    # user still gets a free PDF if their pick is a dead/blocked link.
+    picked = cands[index]
     content, used = None, None
-    for i in order[:5]:
-        content = await asyncio.to_thread(
-            pdf_web.download_validate, cands[i]["url"], max_bytes, query
-        )
+    if picked.get("pdf_links"):
+        content = await asyncio.to_thread(pdf_web.download_links, picked["pdf_links"], max_bytes)
         if content is not None:
-            used = cands[i]
-            break
+            used = picked
+    if content is None:
+        for i in [index] + [j for j in range(len(cands)) if j != index]:
+            content = await asyncio.to_thread(
+                pdf_web.download_validate, cands[i]["url"], max_bytes, query
+            )
+            if content is not None:
+                used = cands[i]
+                break
 
     if content is None:
         await status.edit_text(texts.DOWNLOAD_FAILED)
         return
 
-    meta = await asyncio.to_thread(metadata.lookup, query)
+    m = used.get("meta") or {}
     book_id = await asyncio.to_thread(
         db.save_pdf_book,
-        meta.title if meta else query,
+        query,
         content,
-        author=meta.author_str if meta else None,
-        language=(meta.language if meta and meta.language else language),
+        author=m.get("author"),
+        language=m.get("language") or default_lang,
         source="web",
         source_ref=used["url"],
-        description=meta.description if meta else None,
-        cover_url=meta.cover_url if meta else None,
+        description=m.get("description"),
+        cover_url=m.get("cover_url"),
     )
     await status.delete()
     await delivery.deliver_book(message, book_id, "pdf")
@@ -387,39 +393,73 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
         if not book:
             await message.answer(texts.FILE_MISSING)
             return
-        description = book.get("description")
-        cover_url = book.get("cover_url")
-        author = book.get("author")
-        language = book.get("language")
-        # Enrich missing description/cover from OpenLibrary (best-effort).
-        if not description or not cover_url:
+        description, cover_url = book.get("description"), book.get("cover_url")
+        author, language, genre = book.get("author"), book.get("language"), None
+        if not description or not cover_url:  # enrich from OpenLibrary (best-effort)
             meta = await asyncio.to_thread(metadata.lookup, book["title"], author)
             if meta:
                 description = description or meta.description
                 cover_url = cover_url or meta.cover_url
                 language = language or meta.language
                 author = author or meta.author_str
+                genre = meta.genre
         card = cards.build_card(
             title=book["title"], fmt=fmt, author=author, language=language,
-            description=description, cover_url=cover_url,
+            description=description, cover_url=cover_url, genre=genre,
         )
-    else:
+
+    elif kind == "pdf":
         cands = data.get("candidates") or []
         idx = int(ref)
         if not (0 <= idx < len(cands)):
             await message.answer(texts.NOT_FOUND)
             return
         cand = cands[idx]
-        meta = await asyncio.to_thread(metadata.lookup, query)
+        title = query or cand["title"]
+        # One page fetch → the page's own cover/description/genre + the PDF link(s),
+        # which we cache so the confirm step doesn't fetch the page again.
+        pmeta, links = await asyncio.to_thread(pdf_web.page_info, cand["url"], title)
+        cand["pdf_links"] = links
+        cands[idx] = cand
+        await state.update_data(candidates=cands)
+
+        cover = pmeta.cover_url if pmeta else None
+        desc = pmeta.description if pmeta else None
+        genre = pmeta.genre if pmeta else None
+        author = pmeta.author_str if pmeta else None
+        language = "uz"
+        if not (cover and desc):  # page lacked metadata → OpenLibrary fallback
+            ol = await asyncio.to_thread(metadata.lookup, title)
+            if ol:
+                cover, desc = cover or ol.cover_url, desc or ol.description
+                author, genre = author or ol.author_str, genre or ol.genre
+                language = ol.language or language
+        cand["meta"] = {"author": author, "language": language,
+                        "description": desc, "cover_url": cover}
+        cands[idx] = cand
+        await state.update_data(candidates=cands)
         card = cards.build_card(
-            title=(meta.title if meta else cand["title"]),
-            fmt=("pdf" if kind == "pdf" else "mp3"),
+            title=title, fmt="pdf", author=author, language=language,
+            description=desc, cover_url=cover, genre=genre, site=cand.get("site"),
+        )
+
+    else:  # kind == "yt"
+        cands = data.get("candidates") or []
+        idx = int(ref)
+        if not (0 <= idx < len(cands)):
+            await message.answer(texts.NOT_FOUND)
+            return
+        cand = cands[idx]
+        title = query or cand["title"]
+        meta = await asyncio.to_thread(metadata.lookup, title)
+        card = cards.build_card(
+            title=title, fmt="mp3",
             author=(meta.author_str if meta else cand.get("uploader")),
             language=(meta.language if meta else None),
             description=(meta.description if meta else None),
             cover_url=(meta.cover_url if meta else None),
-            duration=(cand.get("duration_str") if kind == "yt" else None),
-            site=(cand.get("site") if kind == "pdf" else None),
+            genre=(meta.genre if meta else None),
+            duration=cand.get("duration_str"),
         )
 
     kb = card_keyboard(kind, ref)

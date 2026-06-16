@@ -37,6 +37,7 @@ def build_card(
     cover_url: str | None = None,
     duration: str | None = None,
     site: str | None = None,
+    genre: str | None = None,
 ) -> Card:
     """Assemble a card caption + optional cover image url."""
     emoji = "📕" if fmt == "pdf" else "🎧"
@@ -44,6 +45,8 @@ def build_card(
     if author:
         lines.append(f"✍️ {author}")
     lines.append(f"🏷 {_FMT.get(fmt, fmt)}")
+    if genre:
+        lines.append(f"📚 Janr: {genre}")
     if language:
         lines.append(f"🌐 {_LANG.get(language, language)}")
     if duration:

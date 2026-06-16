@@ -27,6 +27,44 @@ def test_search_candidates_empty(monkeypatch):
     assert pdf_web.search_candidates("Nothing", "uz") == []
 
 
+def test_search_candidates_filters_presentations(monkeypatch):
+    monkeypatch.setattr(pdf_web, "_raw_search", lambda q, n: [
+        {"title": "Ityurak taqdimot (prezentatsiya)", "href": "https://slides.uz/p.pdf"},
+        {"title": "Ityurak insho", "href": "https://essays.uz/i.pdf", "body": "insho"},
+        {"title": "Ityurak", "href": "https://mykitob.uz/badiiy/ityurak/"},
+    ])
+    cands = pdf_web.search_candidates("Ityurak", "uz", limit=5)
+    sites = [c.site for c in cands]
+    assert "mykitob.uz" in sites
+    assert "slides.uz" not in sites and "essays.uz" not in sites
+
+
+# ── Page metadata scraping ────────────────────────────────────────────────────
+def test_scrape_meta_extracts_og_and_genre():
+    html = (
+        '<meta property="og:image" content="/cover.jpg">'
+        '<meta property="og:description" content="Tarixiy roman &amp; doston.">'
+        "Muallif: Abdulla Qodiriy"
+    )
+    m = metadata.scrape_meta("https://site.uz/tarixiy/otkan-kunlar", html)
+    assert m is not None
+    assert m.cover_url == "https://site.uz/cover.jpg"  # relative resolved
+    assert m.description == "Tarixiy roman & doston."  # entity unescaped
+    assert m.genre == "Tarixiy"
+    assert m.author_str == "Abdulla Qodiriy"
+
+
+def test_scrape_meta_ignores_jsonld_author():
+    html = '<meta property="og:image" content="http://x/c.jpg">' \
+           '"author":{"name":"admin","@id":"https://x/#schema"}'
+    m = metadata.scrape_meta("https://x.uz/badiiy/b", html)
+    assert m is not None and m.author_str is None  # no garbage author
+
+
+def test_scrape_meta_none_when_empty():
+    assert metadata.scrape_meta("https://x.uz/p", "<html>nothing</html>") is None
+
+
 # ── Metadata (OpenLibrary) pure helpers ───────────────────────────────────────
 def test_pick_language_priority():
     assert metadata._pick_language(["por", "tur", "eng"]) == "en"  # eng beats tur
@@ -62,6 +100,11 @@ def test_build_card_includes_fields():
     assert "4:42:59" in card.text
     assert "Tarixiy roman." in card.text
     assert card.cover_url is None
+
+
+def test_build_card_shows_genre():
+    card = cards.build_card(title="X", fmt="pdf", genre="Roman")
+    assert "Janr: Roman" in card.text
 
 
 def test_build_card_clips_long_description():

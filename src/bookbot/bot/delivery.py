@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 
 from aiogram.types import BufferedInputFile, FSInputFile, Message
@@ -27,6 +28,13 @@ log = logging.getLogger(__name__)
 
 _CONTENT_TYPE = {"pdf": "application/pdf", "mp3": "audio/mpeg"}
 _FMT_EMOJI = {"pdf": "📕", "mp3": "🎧"}
+
+
+def _safe_filename(title: str, ext: str) -> str:
+    """A clean, human filename from the book title (no path/odd chars)."""
+    name = re.sub(r'[\\/:*?"<>|]+', " ", title).strip()
+    name = re.sub(r"\s+", " ", name)[:80] or "kitob"
+    return f"{name}.{ext}"
 
 
 def _caption(book: dict | None, fmt: str) -> str | None:
@@ -81,7 +89,10 @@ async def deliver_book(message: Message, book_id: str, fmt: str) -> bool:
         await message.answer(texts.DELIVER_FAILED)
         return False
 
-    filename = target.storage_path.rsplit("/", 1)[-1]
+    # Name the file after the book (not the ugly storage uuid) so it doesn't look
+    # like a sketchy random download.
+    title = (book or {}).get("title") or target.storage_path.rsplit("/", 1)[-1]
+    filename = _safe_filename(title, "pdf")
     sent = await message.answer_document(
         BufferedInputFile(content, filename=filename), caption=caption
     )
@@ -117,7 +128,7 @@ async def send_audio_parts(
     for i, path in enumerate(paths, 1):
         part_title = title if total == 1 else f"{title} — {i}/{total}"
         sent = await message.answer_audio(
-            FSInputFile(str(path), filename=f"{part_title}.mp3"),
+            FSInputFile(str(path), filename=_safe_filename(part_title, "mp3")),
             title=part_title,
             performer=performer,
         )

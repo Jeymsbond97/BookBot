@@ -67,12 +67,18 @@ _RELIABLE_SITES = (
 
 def _queries(title: str) -> list[str]:
     site_qs = [f"{title} site:{s}" for s in _RELIABLE_SITES]
-    general = [
-        f"{title} pdf yuklab olish",
-        f"{title} kitob pdf skachat",
-        f'"{title}" filetype:pdf',
-    ]
+    # "kitob pdf" keeps results book-shaped (a bare filetype:pdf dragged in random
+    # slide decks / essays / unrelated PDFs).
+    general = [f"{title} kitob pdf yuklab olish", f"{title} kitobi pdf"]
     return site_qs + general
+
+
+# Not books: slide decks, essays, lesson plans, abstracts, test banks…
+_NOT_A_BOOK = (
+    "taqdimot", "prezentatsiya", "prezentatsiyalar", "slayd", "slide", ".ppt",
+    "powerpoint", "insho", "referat", "konspekt", "dars ishlanma", "ishlanma",
+    "mustaqil ish", "kurs ishi", "kurs ish", "bitiruv", "mavzusida", "test savol",
+)
 
 # Paid stores, news, PDF-tool sites, aggregators — never a free book download.
 _BLOCKED = (
@@ -138,6 +144,9 @@ def search_candidates(title: str, language: str = "uz", limit: int = 6) -> list[
             continue
         domain = _domain(url)
         if not domain or any(b in domain for b in _BLOCKED):
+            continue
+        haystack = f"{url} {item.get('title', '')} {item.get('body', '')}".lower()
+        if any(bad in haystack for bad in _NOT_A_BOOK):  # slide deck / essay / etc.
             continue
         cand_title = _clean_title(item.get("title"), title)
         score = fuzz.token_set_ratio(title.lower(), cand_title.lower())
@@ -230,6 +239,25 @@ def _fetch_html(url: str) -> str | None:
     return None
 
 
+def page_info(url: str, title: str | None = None) -> tuple[object | None, list[str]]:
+    """Fetch a candidate page once → (scraped BookMeta, resolved PDF links).
+
+    Used when showing the detail card so we get the page's own cover/description
+    AND the download link in a single request (the confirm step reuses the links,
+    so we don't fetch the page twice). A direct ``.pdf`` url yields itself.
+    """
+    from . import metadata  # local import avoids any import-order coupling
+
+    if urlparse(url).path.lower().endswith(".pdf"):
+        return None, [url]
+    html = _fetch_html(url)
+    if not html:
+        return None, []
+    meta = metadata.scrape_meta(url, html)
+    links = _pdf_links_on_page(url, html, title)
+    return meta, links
+
+
 def download_validate(url: str, max_bytes: int, title: str | None = None) -> bytes | None:
     """Get a real PDF from ``url`` — directly, or by extracting it from the page."""
     # 1) Maybe the url is the PDF itself.
@@ -241,7 +269,12 @@ def download_validate(url: str, max_bytes: int, title: str | None = None) -> byt
     html = _fetch_html(url)
     if not html:
         return None
-    for link in _pdf_links_on_page(url, html, title)[:6]:
+    return download_links(_pdf_links_on_page(url, html, title), max_bytes)
+
+
+def download_links(links: list[str], max_bytes: int) -> bytes | None:
+    """Try each already-resolved link in order; return the first real PDF."""
+    for link in links[:6]:
         data = _try_download(link, max_bytes)
         if data is not None:
             return data

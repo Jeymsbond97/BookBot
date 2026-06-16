@@ -147,6 +147,25 @@ Addresses the 4 issues raised after testing:
 - ⏳ Known limit: some sites block bots (captcha/JS) — the fall-through handles it by
   trying other candidates. Coverage is good but not 100%.
 
+### Card quality + relevance + speed (2026-06-16, round 2 of feedback)
+- **Cover + description + genre from the book's OWN page** (`metadata.scrape_meta`):
+  Uzbek sites have rich OpenGraph tags (cover image + Uzbek description) that
+  OpenLibrary lacks. `pdf_web.page_info(url)` fetches the page once → scraped meta +
+  resolved PDF link(s); the card shows cover/description/🏷 type/📚 Janr/author, and
+  the confirm step **reuses the cached link** (no second page fetch = faster).
+- **PDF filename = book title** (`delivery._safe_filename`) instead of the ugly
+  storage uuid, so it doesn't look like a sketchy random download. Audio parts too.
+- **Filter out non-books** — slide decks / taqdimot / insho / referat / konspekt are
+  dropped from candidates; dropped the bare `filetype:pdf` query that dragged them in.
+- **Speed:** fewer + parallel queries (~9s); card reuses the one page fetch; OpenLibrary
+  only as a fallback when the page lacks cover/description.
+- Auto-save: delivered PDFs (`save_pdf_book`) and audio (`save_audio_book`) are already
+  cached to the DB with description/cover, so a later request for the same book is served
+  from the catalog.
+- 24 unit tests pass (added scrape_meta, not-a-book filter, genre card); ruff clean.
+  ⏳ Author is best-effort (only a visible "Muallif:" label is trusted — avoids JSON-LD
+  garbage); often absent for Uzbek pages.
+
 ### Key decisions locked in
 - **PDF search = DuckDuckGo (`ddgs`), keyless.** (Google PSE dropped whole-web search in 2026 — dropped.)
 - **Audio = YouTube via `yt-dlp` + `ffmpeg`, keyless.** Audio files are NOT stored; only a Telegram

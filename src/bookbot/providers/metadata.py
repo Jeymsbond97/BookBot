@@ -11,8 +11,11 @@ limited / 429s from datacenters, so OpenLibrary is the reliable default.)
 
 from __future__ import annotations
 
+import html as _html
 import logging
+import re
 from dataclasses import dataclass, field
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from rapidfuzz import fuzz
@@ -50,6 +53,10 @@ class BookMeta:
     @property
     def author_str(self) -> str | None:
         return ", ".join(self.authors) if self.authors else None
+
+    @property
+    def genre(self) -> str | None:
+        return self.subjects[0] if self.subjects else None
 
 
 def _best_doc(query: str, docs: list[dict]) -> dict | None:
@@ -119,4 +126,57 @@ def lookup(title: str, author: str | None = None) -> BookMeta | None:
         cover_url=cover_url,
         subjects=(doc.get("subject") or [])[:5],
         year=doc.get("first_publish_year"),
+    )
+
+
+# ── Scrape metadata straight from a book's own page (best for Uzbek books) ────
+# Uzbek book sites carry rich OpenGraph tags (cover + Uzbek description) that
+# OpenLibrary lacks, so when we visit a page to fetch the PDF we also read these.
+_GENRE_SLUGS = {
+    "badiiy": "Badiiy", "tarix": "Tarixiy", "roman": "Roman", "qissa": "Qissa",
+    "she": "She'riyat", "sher": "She'riyat", "ilm": "Ilmiy", "din": "Diniy",
+    "detektiv": "Detektiv", "fantast": "Fantastika", "biograf": "Biografiya",
+    "psixolog": "Psixologiya", "biznes": "Biznes", "bolalar": "Bolalar kitobi",
+}
+# Only a visible "Muallif:/Автор:" label followed by a name-like value — avoids
+# matching schema.org JSON-LD ("author":{"name":"admin"}) and other junk.
+_AUTHOR_RE = re.compile(
+    r"(?:Muallif|Муаллиф|Автор)\s*[:\-–]\s*"
+    r"([A-Za-zА-Яа-яЁёЎўҚқҒғҲҳ'’.\- ]{3,50})",
+    re.I,
+)
+
+
+def _og(html_text: str, prop: str) -> str | None:
+    pat1 = rf'<meta[^>]+(?:property|name)=["\']{re.escape(prop)}["\'][^>]*content=["\']([^"\']*)'
+    pat2 = rf'<meta[^>]+content=["\']([^"\']*)["\'][^>]*(?:property|name)=["\']{re.escape(prop)}'
+    m = re.search(pat1, html_text, re.I) or re.search(pat2, html_text, re.I)
+    return _html.unescape(m.group(1)).strip() if m else None
+
+
+def _genre_from(url: str, html_text: str) -> str | None:
+    low = (urlparse(url).path + " " + (_og(html_text, "article:section") or "")).lower()
+    for slug, name in _GENRE_SLUGS.items():
+        if slug in low:
+            return name
+    return None
+
+
+def scrape_meta(url: str, html_text: str) -> BookMeta | None:
+    """Pull cover/description/genre/author from a book page's OpenGraph tags."""
+    cover = _og(html_text, "og:image")
+    if cover:
+        cover = urljoin(url, cover)
+    desc = _og(html_text, "og:description")
+    author_m = _AUTHOR_RE.search(html_text)
+    author = _html.unescape(author_m.group(1)).strip() if author_m else None
+    genre = _genre_from(url, html_text)
+    if not (cover or desc or genre):
+        return None
+    return BookMeta(
+        title=_og(html_text, "og:title") or "",
+        authors=[author] if author else [],
+        description=desc,
+        cover_url=cover,
+        subjects=[genre] if genre else [],
     )
