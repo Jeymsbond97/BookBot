@@ -10,6 +10,26 @@ BTN_BACK = "⬅️ Orqaga"
 BTN_YES_SEND = "✅ Ha, yubor"
 BTN_NO = "❌ Yo'q"
 BTN_SEND_FILE = "📥 Yuborish"
+BTN_LANGUAGE = "🌐 Til"
+
+# ── Language filter (Phase 6) ──────────────────────────────────────────────────
+LANG_UZ = "🇺🇿 O'zbekcha"
+LANG_EN = "🇬🇧 Inglizcha"
+LANG_ALL = "🌐 Barchasi"
+
+_LANG_SHORT = {"uz": "O'zbekcha", "en": "Inglizcha"}
+
+
+def lang_button(lang: str | None) -> str:
+    """Main-menu language button label, showing the active filter."""
+    return f"🌐 Til: {_LANG_SHORT.get(lang or '', 'Barchasi')}"
+
+
+LANGUAGE_PROMPT = "🌐 Qaysi tildagi kitoblar ko'rsatilsin?"
+
+
+def language_set(lang: str | None) -> str:
+    return f"🌐 Til tanlandi: <b>{_LANG_SHORT.get(lang or '', 'Barchasi')}</b>"
 
 # ── Messages ───────────────────────────────────────────────────────────────────
 WELCOME = (
@@ -33,6 +53,21 @@ FORMAT_CHOSEN_AUDIO = (
 )
 
 CHOOSE_CATEGORY = "📂 Mavzuni tanlang:"
+
+
+def browse_header(name: str, page: int) -> str:
+    """Header above a category's book listing."""
+    head = f"📂 <b>{name}</b> bo'limidagi kitoblar:"
+    if page > 0:
+        head += f"  <i>(sahifa {page + 1})</i>"
+    return head
+
+
+def category_empty(name: str) -> str:
+    return (
+        f"📂 <b>{name}</b> bo'limida hozircha kitob yo'q.\n\n"
+        "Kitob nomini yozib qidirib ko'ring — topsam, shu bo'limga qo'shib qo'yaman."
+    )
 
 # Shown if the user types before choosing a format.
 NEED_FORMAT_FIRST = "Avval format tanlang: 📕 PDF yoki 🎧 Audio."
@@ -144,3 +179,35 @@ DOWNLOAD_FAILED = "⚠️ Yuklab bo'lmadi — bu variant ishlamadi. Boshqasini t
 ERROR_GENERIC = "⚠️ Xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring yoki /start bosing."
 AUDIO_PARTS_NOTE = "📚 Audio katta — qismlarga bo'lib yuboraman:"
 NO_VARIANTS = "🔍 Internetdan ham hech narsa topilmadi. Boshqacha yozib ko'ring."
+
+
+# ── Admin upload (Phase 7) ─────────────────────────────────────────────────────
+ADMIN_ONLY = "⛔️ Bu amal faqat adminlar uchun."
+ADMIN_NOT_PDF = "⚠️ Faqat <b>PDF</b> fayl yuboring."
+ADMIN_HELP = (
+    "🛠 <b>Admin — kitob qo'shish</b>\n\n"
+    "Menga shunchaki <b>PDF fayl</b> yuboring — keyin nomi, muallifi, mavzusi va "
+    "tilini so'rayman, so'ng katalogga saqlayman.\n\n"
+    "Bekor qilish uchun: /cancel"
+)
+ADMIN_SKIP_HINT = "O'tkazib yuborish uchun «-» belgisini yuboring."
+
+
+def admin_ask_title(suggested: str) -> str:
+    return (
+        "📕 PDF qabul qilindi.\n\n"
+        f"<b>Kitob nomi?</b>\nTaklif: <code>{suggested}</code>\n"
+        "Shuni ishlatish uchun «-» yuboring, yoki to'g'ri nomni yozing."
+    )
+
+
+ADMIN_ASK_AUTHOR = "✍️ <b>Muallifi?</b>\n" + ADMIN_SKIP_HINT
+ADMIN_ASK_CATEGORY = "📂 <b>Mavzusi?</b> Tanlang 👇"
+ADMIN_ASK_LANGUAGE = "🌐 <b>Tili?</b>"
+ADMIN_SAVING = "💾 Saqlanyapti…"
+ADMIN_CANCELLED = "❌ Bekor qilindi."
+
+
+def admin_saved(title: str, category: str | None) -> str:
+    cat = f"\n📂 Mavzu: {category}" if category else ""
+    return f"✅ Saqlandi!\n\n📕 <b>{title}</b>{cat}\n\nEndi foydalanuvchilar uni topadi."

@@ -17,7 +17,10 @@ class FormatCB(CallbackData, prefix="fmt"):
 
 
 class MenuCB(CallbackData, prefix="menu"):
-    """Top-level menu navigation. action = 'categories' | 'change_format'."""
+    """Top-level menu navigation.
+
+    action = 'categories' | 'change_format' | 'language' | 'back_to_menu'.
+    """
 
     action: str
 
@@ -26,6 +29,31 @@ class CategoryCB(CallbackData, prefix="cat"):
     """Picking a category to browse. slug = category slug."""
 
     slug: str
+
+
+class CatPageCB(CallbackData, prefix="catpg"):
+    """Pagination within a category browse listing."""
+
+    slug: str
+    page: int
+
+
+class LangCB(CallbackData, prefix="lang"):
+    """Pick a language filter. value = 'uz' | 'en' | 'all'."""
+
+    value: str
+
+
+class AdminCatCB(CallbackData, prefix="acat"):
+    """Admin upload: pick the category for the PDF being uploaded."""
+
+    slug: str
+
+
+class AdminLangCB(CallbackData, prefix="alang"):
+    """Admin upload: pick the language for the PDF being uploaded."""
+
+    value: str
 
 
 class PageCB(CallbackData, prefix="pg"):
@@ -65,10 +93,12 @@ def format_keyboard() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def main_menu_keyboard() -> InlineKeyboardMarkup:
-    """Shown after a format is chosen: browse categories or switch format."""
+def main_menu_keyboard(lang: str | None = None) -> InlineKeyboardMarkup:
+    """Shown after a format is chosen: browse categories, filter language, or
+    switch format. The language button shows the active filter."""
     kb = InlineKeyboardBuilder()
     kb.button(text=texts.BTN_CATEGORIES, callback_data=MenuCB(action="categories"))
+    kb.button(text=texts.lang_button(lang), callback_data=MenuCB(action="language"))
     kb.button(text="🔄 Formatni o'zgartirish", callback_data=MenuCB(action="change_format"))
     kb.adjust(1)
     return kb.as_markup()
@@ -81,7 +111,65 @@ def categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
         kb.button(text=c["name_uz"], callback_data=CategoryCB(slug=c["slug"]))
     kb.adjust(2)
     kb.row(InlineKeyboardButton(text=texts.BTN_BACK,
-                                callback_data=MenuCB(action="change_format").pack()))
+                                callback_data=MenuCB(action="back_to_menu").pack()))
+    return kb.as_markup()
+
+
+def language_keyboard(current: str | None) -> InlineKeyboardMarkup:
+    """Choose the language filter (uz / en / all). The active one is ticked."""
+    kb = InlineKeyboardBuilder()
+    for value, label in (("uz", texts.LANG_UZ), ("en", texts.LANG_EN), ("all", texts.LANG_ALL)):
+        active = (current or "all") == value
+        text = ("✅ " if active else "") + label
+        kb.button(text=text, callback_data=LangCB(value=value))
+    kb.adjust(1)
+    kb.row(InlineKeyboardButton(text=texts.BTN_BACK,
+                                callback_data=MenuCB(action="back_to_menu").pack()))
+    return kb.as_markup()
+
+
+def browse_keyboard(
+    book_ids: list[str], slug: str, page: int, has_next: bool
+) -> InlineKeyboardMarkup:
+    """Numbered buttons for a category listing + ◀/▶ pagination + back."""
+    from .search import PAGE_SIZE  # local import avoids a circular import at module load
+
+    kb = InlineKeyboardBuilder()
+    start = page * PAGE_SIZE
+    for i, book_id in enumerate(book_ids):
+        kb.button(text=str(start + i + 1), callback_data=CardCB(kind="db", ref=book_id))
+    kb.adjust(5)
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(
+            text="◀️", callback_data=CatPageCB(slug=slug, page=page - 1).pack()))
+    if has_next:
+        nav.append(InlineKeyboardButton(
+            text="▶️", callback_data=CatPageCB(slug=slug, page=page + 1).pack()))
+    if nav:
+        kb.row(*nav)
+
+    kb.row(InlineKeyboardButton(text=texts.BTN_CATEGORIES,
+                                callback_data=MenuCB(action="categories").pack()))
+    return kb.as_markup()
+
+
+def admin_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
+    """Category picker for the admin upload wizard (two per row)."""
+    kb = InlineKeyboardBuilder()
+    for c in categories:
+        kb.button(text=c["name_uz"], callback_data=AdminCatCB(slug=c["slug"]))
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def admin_language_keyboard() -> InlineKeyboardMarkup:
+    """Language picker for the admin upload wizard."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text=texts.LANG_UZ, callback_data=AdminLangCB(value="uz"))
+    kb.button(text=texts.LANG_EN, callback_data=AdminLangCB(value="en"))
+    kb.adjust(2)
     return kb.as_markup()
 
 

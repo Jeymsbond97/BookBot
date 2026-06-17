@@ -22,32 +22,41 @@ import tempfile
 from pathlib import Path
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message
 
 from .. import db
+from ..categories import category_for_genre
 from ..config import get_settings
 from ..providers import ai_meta, metadata, pdf_web, youtube_audio
 from . import cards, delivery, ranking, texts
 from .keyboards import (
+    AdminCatCB,
+    AdminLangCB,
     CardCB,
     CategoryCB,
+    CatPageCB,
     FormatCB,
+    LangCB,
     MenuCB,
     OfferCB,
     PageCB,
     SendCB,
+    admin_categories_keyboard,
+    admin_language_keyboard,
+    browse_keyboard,
     candidates_keyboard,
     card_keyboard,
     categories_keyboard,
     format_keyboard,
+    language_keyboard,
     main_menu_keyboard,
     offer_keyboard,
     results_keyboard,
 )
-from .search import PAGE_SIZE, search_page
-from .states import Flow
+from .search import PAGE_SIZE, browse_page, search_page
+from .states import AdminUpload, Flow
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -91,13 +100,136 @@ async def cmd_help(message: Message) -> None:
     await message.answer(texts.HELP)
 
 
+# ── Admin: upload a PDF into the catalog (Phase 7) ─────────────────────────────
+def _is_admin(message: Message) -> bool:
+    return bool(message.from_user) and get_settings().is_admin(message.from_user.id)
+
+
+@router.message(Command("admin"))
+async def cmd_admin(message: Message) -> None:
+    if not _is_admin(message):
+        await message.answer(texts.ADMIN_ONLY)
+        return
+    await message.answer(texts.ADMIN_HELP)
+
+
+@router.message(Command("cancel"))
+async def cmd_cancel(message: Message, state: FSMContext) -> None:
+    cur = await state.get_state()
+    if cur and cur.startswith("AdminUpload"):
+        await state.set_state(Flow.searching)
+        await message.answer(texts.ADMIN_CANCELLED, reply_markup=main_menu_keyboard())
+    else:
+        await message.answer(texts.ADMIN_CANCELLED)
+
+
+@router.message(F.document)
+async def on_admin_document(message: Message, state: FSMContext) -> None:
+    """An admin sending a PDF starts the upload wizard. Non-admins are told it's
+    admin-only (so a normal user who sends a file isn't ignored)."""
+    if not _is_admin(message):
+        await message.answer(texts.ADMIN_ONLY)
+        return
+    doc = message.document
+    is_pdf = (doc.mime_type == "application/pdf") or (
+        (doc.file_name or "").lower().endswith(".pdf")
+    )
+    if not is_pdf:
+        await message.answer(texts.ADMIN_NOT_PDF)
+        return
+
+    from pathlib import PurePath
+
+    suggested = PurePath(doc.file_name or "kitob").stem
+    await state.set_state(AdminUpload.title)
+    await state.update_data(
+        up_file_id=doc.file_id, up_suggested=suggested, up_filename=doc.file_name
+    )
+    await message.answer(texts.admin_ask_title(suggested))
+
+
+@router.message(StateFilter(AdminUpload.title), F.text)
+async def on_admin_title(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    title = message.text.strip()
+    if title == "-":
+        title = data.get("up_suggested") or "Kitob"
+    await state.update_data(up_title=title)
+    await state.set_state(AdminUpload.author)
+    await message.answer(texts.ADMIN_ASK_AUTHOR)
+
+
+@router.message(StateFilter(AdminUpload.author), F.text)
+async def on_admin_author(message: Message, state: FSMContext) -> None:
+    author = message.text.strip()
+    author = None if author == "-" else author
+    await state.update_data(up_author=author)
+    await state.set_state(AdminUpload.category)
+    categories = await asyncio.to_thread(db.get_categories)
+    await message.answer(texts.ADMIN_ASK_CATEGORY,
+                         reply_markup=admin_categories_keyboard(categories))
+
+
+@router.callback_query(StateFilter(AdminUpload.category), AdminCatCB.filter())
+async def on_admin_category(query: CallbackQuery, callback_data: AdminCatCB, state: FSMContext) -> None:
+    cat = await asyncio.to_thread(db.get_category, callback_data.slug)
+    await state.update_data(
+        up_cat_slug=callback_data.slug,
+        up_cat_name=(cat or {}).get("name_uz") or callback_data.slug,
+    )
+    await state.set_state(AdminUpload.language)
+    await query.message.edit_text(texts.ADMIN_ASK_LANGUAGE,
+                                  reply_markup=admin_language_keyboard())
+    await query.answer()
+
+
+@router.callback_query(StateFilter(AdminUpload.language), AdminLangCB.filter())
+async def on_admin_language(query: CallbackQuery, callback_data: AdminLangCB, state: FSMContext) -> None:
+    data = await state.get_data()
+    await query.answer()
+    status = await query.message.edit_text(texts.ADMIN_SAVING)
+
+    # Download the PDF bytes from Telegram, then store like any other PDF.
+    try:
+        buf = await query.bot.download(data["up_file_id"])
+        content = buf.read()
+    except Exception:
+        log.exception("Admin PDF download failed")
+        await status.edit_text(texts.DOWNLOAD_FAILED)
+        await state.set_state(Flow.searching)
+        return
+
+    title = data.get("up_title") or data.get("up_suggested") or "Kitob"
+    slug = data.get("up_cat_slug")
+    book_id = await asyncio.to_thread(
+        db.save_pdf_book,
+        title,
+        content,
+        author=data.get("up_author"),
+        language=callback_data.value,
+        source="admin",
+        source_ref=data.get("up_filename"),
+    )
+    if slug:
+        await asyncio.to_thread(db.set_book_category, book_id, slug)
+
+    await state.set_state(Flow.searching)
+    await status.edit_text(
+        texts.admin_saved(title, data.get("up_cat_name")),
+        reply_markup=main_menu_keyboard(data.get("lang")),
+    )
+
+
 # ── Format selection ─────────────────────────────────────────────────────────
 @router.callback_query(FormatCB.filter())
 async def on_format(query: CallbackQuery, callback_data: FormatCB, state: FSMContext) -> None:
     fmt = callback_data.value
     await state.update_data(fmt=fmt)
     await state.set_state(Flow.searching)
-    await query.message.edit_text(_FORMAT_MSG[fmt], reply_markup=main_menu_keyboard())
+    data = await state.get_data()
+    await query.message.edit_text(
+        _FORMAT_MSG[fmt], reply_markup=main_menu_keyboard(data.get("lang"))
+    )
     await query.answer()
 
 
@@ -114,11 +246,12 @@ async def on_back_to_menu(query: CallbackQuery, state: FSMContext) -> None:
     fmt = data.get("fmt", "pdf")
     await state.set_state(Flow.searching)
     text = _FORMAT_MSG.get(fmt, texts.CHOOSE_FORMAT)
+    kb = main_menu_keyboard(data.get("lang"))
     # The previous message may be a photo card → can't edit_text; send fresh.
     try:
-        await query.message.edit_text(text, reply_markup=main_menu_keyboard())
+        await query.message.edit_text(text, reply_markup=kb)
     except Exception:
-        await query.message.answer(text, reply_markup=main_menu_keyboard())
+        await query.message.answer(text, reply_markup=kb)
     await query.answer()
 
 
@@ -133,28 +266,56 @@ async def on_categories(query: CallbackQuery) -> None:
 
 
 @router.callback_query(CategoryCB.filter())
-async def on_category_pick(query: CallbackQuery, callback_data: CategoryCB) -> None:
-    await query.answer(
-        f"'{callback_data.slug}' — bu bo'lim keyingi bosqichda ishga tushadi.",
-        show_alert=True,
+async def on_category_pick(query: CallbackQuery, callback_data: CategoryCB, state: FSMContext) -> None:
+    await _render_browse(query.message, state, callback_data.slug, 0)
+    await query.answer()
+
+
+@router.callback_query(CatPageCB.filter())
+async def on_cat_page(query: CallbackQuery, callback_data: CatPageCB, state: FSMContext) -> None:
+    await _render_browse(query.message, state, callback_data.slug, max(callback_data.page, 0))
+    await query.answer()
+
+
+# ── Language filter ────────────────────────────────────────────────────────────
+@router.callback_query(MenuCB.filter(F.action == "language"))
+async def on_language_menu(query: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    await query.message.edit_text(
+        texts.LANGUAGE_PROMPT, reply_markup=language_keyboard(data.get("lang"))
     )
+    await query.answer()
+
+
+@router.callback_query(LangCB.filter())
+async def on_language_set(query: CallbackQuery, callback_data: LangCB, state: FSMContext) -> None:
+    lang = None if callback_data.value == "all" else callback_data.value
+    await state.update_data(lang=lang)
+    await query.message.edit_text(
+        texts.language_set(lang), reply_markup=main_menu_keyboard(lang)
+    )
+    await query.answer()
 
 
 # ── Text query → DB search → cross-format → internet variants ─────────────────
-@router.message(F.text & ~F.text.startswith("/"))
+@router.message(
+    F.text & ~F.text.startswith("/"),
+    StateFilter(Flow.choosing_format, Flow.searching, None),
+)
 async def on_text(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     fmt = data.get("fmt")
     if not fmt:
         await message.answer(texts.NEED_FORMAT_FIRST, reply_markup=format_keyboard())
         return
+    lang = data.get("lang")
 
     query = message.text.strip()
     await state.update_data(query=query, page=0, cross_format=False)
     status = await message.answer(texts.SEARCHING)
 
     # 1) DB in the chosen format.
-    results, has_next = await search_page(query, page=0, fmt=fmt)
+    results, has_next = await search_page(query, page=0, fmt=fmt, language=lang)
     if results:
         exact = ranking.best_exact(query, results)
         if exact is not None:
@@ -164,7 +325,7 @@ async def on_text(message: Message, state: FSMContext) -> None:
         return
 
     # 2) Other format exists in the DB → cross-format fallback.
-    alt, alt_has_next = await search_page(query, page=0, fmt=None)
+    alt, alt_has_next = await search_page(query, page=0, fmt=None, language=lang)
     if alt:
         exact_alt = ranking.best_exact(query, alt)
         if exact_alt is not None:
@@ -200,7 +361,9 @@ async def on_page(query: CallbackQuery, callback_data: PageCB, state: FSMContext
 
     search_fmt = None if data.get("cross_format") else fmt
     page = max(callback_data.page, 0)
-    results, has_next = await search_page(search_query, page=page, fmt=search_fmt)
+    results, has_next = await search_page(
+        search_query, page=page, fmt=search_fmt, language=data.get("lang")
+    )
     if not results:
         await query.answer()
         return
@@ -331,6 +494,9 @@ async def _send_web_pdf(message: Message, state: FSMContext, index: int) -> None
         description=m.get("description"),
         cover_url=m.get("cover_url"),
     )
+    slug = category_for_genre(m.get("genre"))
+    if slug:
+        await asyncio.to_thread(db.set_book_category, book_id, slug)
     await status.delete()
     await delivery.deliver_book(message, book_id, "pdf")
 
@@ -365,7 +531,7 @@ async def _send_youtube(message: Message, state: FSMContext, index: int) -> None
 
         file_ids = await delivery.send_audio_parts(message, parts, title, performer)
         total_bytes = sum(p.stat().st_size for p in parts)
-        await asyncio.to_thread(
+        book_id = await asyncio.to_thread(
             db.save_audio_book,
             title,
             youtube_id=cand["video_id"],
@@ -377,6 +543,9 @@ async def _send_youtube(message: Message, state: FSMContext, index: int) -> None
             cover_url=meta.cover_url if meta else None,
             size_bytes=total_bytes,
         )
+        slug = category_for_genre(cand.get("genre"))
+        if slug:
+            await asyncio.to_thread(db.set_book_category, book_id, slug)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -428,7 +597,7 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
         desc, cover, genre, language, author = await _enrich(
             title, author, description=desc, cover_url=cover, genre=genre, language="uz")
         cand["meta"] = {"author": author, "language": language,
-                        "description": desc, "cover_url": cover}
+                        "description": desc, "cover_url": cover, "genre": genre}
         cands[idx] = cand
         await state.update_data(candidates=cands)
         card = cards.build_card(
@@ -446,6 +615,9 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
         title = query or cand["title"]
         desc, cover, genre, language, author = await _enrich(
             title, cand.get("uploader"))
+        cand["genre"] = genre
+        cands[idx] = cand
+        await state.update_data(candidates=cands)
         card = cards.build_card(
             title=title, fmt="mp3", author=author, language=language,
             description=desc, cover_url=cover, genre=genre,
@@ -508,6 +680,33 @@ async def _render_results(message: Message, query: str, page: int, results, has_
     parts.append(texts.RESULTS_PROMPT)
     text = "\n\n".join(parts)
     kb = results_keyboard([r.id for r in results], page, has_next)
+    try:
+        await message.edit_text(text, reply_markup=kb)
+    except Exception:
+        await message.answer(text, reply_markup=kb)
+
+
+async def _render_browse(message: Message, state: FSMContext, slug: str, page: int) -> None:
+    """Show a category's books as a numbered, paginated list (reuses the card flow)."""
+    data = await state.get_data()
+    fmt = data.get("fmt")  # keep the user's chosen format filter; None = any
+    cat = await asyncio.to_thread(db.get_category, slug)
+    name = (cat or {}).get("name_uz") or slug
+
+    results, has_next = await browse_page(slug, page, fmt=fmt, language=data.get("lang"))
+    if not results:
+        try:
+            await message.edit_text(texts.category_empty(name),
+                                    reply_markup=main_menu_keyboard(data.get("lang")))
+        except Exception:
+            await message.answer(texts.category_empty(name),
+                                 reply_markup=main_menu_keyboard(data.get("lang")))
+        return
+
+    start = page * PAGE_SIZE
+    lines = [texts.result_line(start + i + 1, r.label) for i, r in enumerate(results)]
+    text = texts.browse_header(name, page) + "\n\n" + "\n".join(lines) + "\n\n" + texts.RESULTS_PROMPT
+    kb = browse_keyboard([r.id for r in results], slug, page, has_next)
     try:
         await message.edit_text(text, reply_markup=kb)
     except Exception:

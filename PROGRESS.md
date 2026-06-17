@@ -3,7 +3,22 @@
 > 🇺🇿 Bu fayl — qayerga kelganimiz va nima qolganini ko'rsatadi. Ertaga shu yerdan davom etamiz.
 > To'liq loyiha tavsifi: **README.md**. Bosqichlar ro'yxati: README §16 (Build Roadmap).
 
-_Last updated: 2026-06-16 (Phase 5 + variants/cards from user feedback done)_
+_Last updated: 2026-06-17 (Phase 6 + 7 done; PDF fetch fixes; redesign/feature plan added below)_
+
+### 🔧 PDF fetch reliability fixes (2026-06-17)
+
+Two real-world download failures found & fixed in `providers/pdf_web.py`:
+
+- **ZIP-wrapped PDFs:** sites like **pdfbox.uz** serve the PDF inside a `.zip`
+  (`/download/<id>` → `application/octet-stream`, magic `PK`). The bot only accepted `%PDF`,
+  so it rejected them. Added `_pdf_from_zip()` — extracts the largest valid PDF from the ZIP.
+- **Flaky search dropping good sources:** DuckDuckGo rate-limits bursts of concurrent queries
+  (raising), which silently dropped the best free-PDF sites (avloniy/pdfbox). `_raw_search`
+  now **retries on exception with backoff**, and concurrency was lowered (5→3 workers).
+  Added `avloniy.uz` + `pdfbox.uz` to `_RELIABLE_SITES`; blocked junk domains
+  (apkpure, olcha, prezi, cyberleninka, abituriyentlar). Verified: both reported books
+  ("Tushda kechgan umrlar", "Ulamolar nazdida vaqtning qadri") now download every run.
+  ⚠️ Trade-off: search is slower (~15-18 s) but reliable.
 
 ---
 
@@ -191,11 +206,129 @@ Addresses the 4 issues raised after testing:
 
 ---
 
+### Phase 6 — Categories & language (DONE, 2026-06-17)
+
+- **Browse by category** now works end-to-end: 📂 Kategoriyalar → pick a category →
+  paginated numbered list → same detail-card → 📥 send flow as search. New SQL function
+  `browse_books(cat_slug, lang, fmt, lim, off)` in `supabase/migrations/0002_browse.sql`
+  (⚠️ **must be run in Supabase SQL Editor** for browse to return rows).
+- **Language filter**: main-menu 🌐 Til button → uz / en / barchasi; the choice is kept
+  in FSM (`lang`) and applied to both search and browse.
+- **Auto-tagging**: auto-fetched books (web PDF / YouTube) get a best-effort category from
+  their AI genre via `src/bookbot/categories.py` (`category_for_genre`), so browse listings
+  aren't empty. Admin uploads set the category explicitly.
+- New: `db.get_category`, `db.browse_books`, `db.set_book_category`; `search.browse_page`;
+  keyboards `language_keyboard`/`browse_keyboard`; callbacks `CatPageCB`/`LangCB`.
+
+### Phase 7 — Admin uploads (DONE, 2026-06-17)
+
+- An admin (id in `ADMIN_IDS`) sends a **PDF** → wizard asks **title → author → category →
+  language** → downloads the bytes from Telegram and stores via `db.save_pdf_book`
+  (`source="admin"`) + `db.set_book_category`. FSM states in `AdminUpload`.
+- `/admin` shows help; `/cancel` aborts the wizard. Non-admins sending a file get
+  "admin only". ⚠️ Telegram bot `getFile` caps downloads at ~20 MB — bigger PDFs fail.
+- New keyboards `admin_categories_keyboard`/`admin_language_keyboard`; callbacks
+  `AdminCatCB`/`AdminLangCB`.
+- 30 unit tests pass; ruff clean.
+
+---
+
 ## 🔜 What's left (next sessions)
 
-- **Phase 6 — Categories & language** ← _START HERE NEXT_ (browse by category listing; uz/en filtering).
-- **Phase 7 — Admin uploads** (admin sends a PDF → tag title/author/category/language → store).
-- **Phase 8 — Polish & deploy** (tests, rate-limit/anti-abuse, logging, Docker, optional Bot API server).
+> 🎯 **New direction (2026-06-17):** user saw a friend's bot **@MyKitobBot** (screenshots in
+> `example/`) — very polished, with AI chat, profiles, gamification, leaderboards, premium.
+> User wants ours to be **even better**. Tomorrow: fix the card bugs first, then redesign the
+> card, then build feature parity + our edge (auto-fetch from the web, which MyKitobBot lacks).
+
+### 🐞 Phase 9a — Card bug fixes ← _START HERE NEXT (quick wins)_
+
+Confirmed bugs on the detail card (see user complaint + repro 2026-06-17):
+
+1. **Description shows scraped SEO junk, truncated.** e.g. pdfbox pages return
+   `og:description` = "«…» - yuklab olish! O'zbek tilida kitoblar bo" (the SITE itself
+   truncates it). `_enrich` prefers this scraped text over the clean AI description
+   (`description = description or ai.description`), so the junk wins.
+   - **Fix:** add `_is_junk_description()` — reject text containing "yuklab olish",
+     "kitoblar bo", "pdf", site names, or ending mid-word — and treat junk as empty so the
+     **AI description** (clean, full Uzbek) is used. Verify the full text shows (caption cap
+     is 1000; for long ones send cover as a separate photo + full text message).
+2. **Title is lower-case / messy.** Card title comes from the user's raw query
+   (`title = query or cand["title"]`), so "til ofatlari" stays lowercase; cand titles carry
+   "- yuklab olish! …" suffixes.
+   - **Fix:** add `clean_title()` — strip "- yuklab olish!", " pdf", " skachat", site
+     suffixes, collapse spaces, **Title-Case** (uz-aware: keep `G'`, `O'`, apostrophes).
+3. **Cover is a placeholder.** pdfbox returns `default-images/document-books-image.webp`.
+   - **Fix:** blacklist known placeholder cover URLs (`default-images`, `no-image`,
+     `placeholder`) → treat as no cover → fall back to OpenLibrary cover or a clean text card.
+4. **Design is ugly / inconsistent ("tartib yo'q", bad emoji).**
+   - **Fix:** redesign `cards.build_card` (see 9b).
+
+### 🎨 Phase 9b — Card & UX redesign
+
+Match/beat MyKitobBot's card. Target layout (clean, ordered, one emoji per line):
+```
+[cover]
+📖 <b>Til ofatlari</b>
+✍️ Abu Homid G'azzoliy
+🏷 Diniy  ·  🌐 O'zbekcha  ·  📄 PDF
+📊 6.9 MB   ⬇️ 142 marta   ❤️ 31
+
+<i>Toza, to'liq AI tavsif (Tasnif) — 2-3 jumla.</i>
+
+[ 📥 Yuborish ]
+[ ❤️ Like   ⭐️ Baho   💬 Izoh ]
+[ ⬅️ Orqaga ]
+```
+- Consistent Uzbek labels, no duplicate/ugly emoji, fields in a fixed order, hide empty fields.
+- Review all of `texts.py` for consistent tone + capitalization.
+
+### 🚀 Phase 9c — Feature parity with MyKitobBot (needs new DB tables)
+
+New tables: `users`, `downloads`, `likes`, `comments`, `ratings`, `user_activity` (points).
+
+1. **Download counter** — increment on each delivery; show ⬇️ on card; `/top` leaderboard
+   (most-downloaded, paginated 1-10).
+2. **Likes** — ❤️ toggle per book; show count; `/toplike` (top liked); `/my` (my liked books).
+3. **User profiles** — `/myprofile`: name, phone, premium-until, points (ball), level (daraja),
+   books-read count, preferred genre; buttons to edit name/phone/genre. Needs a `users` row
+   created on first `/start`.
+4. **Gamification** — award points for actions (daily use, uploads, invites); levels;
+   `/topoquvchi` (top active users leaderboard).
+5. **Comments & ratings** — `/comments` thread per book; ⭐️ 1-5 rating → avg shown on card.
+6. **Inline search** — `@jeymsbooks_bot <query>` inline mode to share books in any chat.
+
+### 🤖 Phase 9d — AI assistant (the standout feature)
+
+MyKitobBot opens a **Telegram Mini App** with a conversational AI (voice + text): ask anything,
+it finds books, gives info/reviews, answers questions; free tier has a daily limit + premium.
+
+- **Step 1 (in-bot, simpler):** an `/ai` chat mode — free-form chat backed by GPT with
+  **function-calling tools** wired to our catalog/search (`search_books`, `browse_books`,
+  web-fetch) so it can actually find & send books, not just talk. Daily message limit for free.
+- **Step 2 (Mini App, bigger):** a Telegram Web App (separate web frontend) for the rich chat
+  UI (language toggle, light/dark, mic, suggested prompts) like the screenshots.
+- Voice input → Whisper transcription (optional).
+- Model: currently OpenAI (`ai_meta.py`); evaluate cost vs. quality before scaling AI chat.
+
+### 💰 Phase 9e — Monetization & growth (later)
+
+- **Premium** subscription (unlimited AI/downloads, no ads); free tier daily limits.
+- **Ads** ("Reklamani joylash"): sponsored messages/placements.
+- **Referrals**: invite friends → points / premium days.
+
+### ✨ Our edge / extra suggestions (beat the friend's bot)
+
+- **Auto-fetch from the web** (we already have this!) — MyKitobBot only serves uploaded files;
+  ours finds books on the open web (avloniy/pdfbox/…) AND on YouTube for audio. Lean into it.
+- **Personalized recommendations** from reading history + preferred genre ("Siz uchun").
+- **"Book of the day"** + new-arrivals notifications; notify when a requested missing book appears.
+- **Reading progress / "continue"** for long PDFs; curated **collections** ("100 ta o'zbek klassikasi").
+- **Multi-language UI** (uz/ru/en) — we already filter content by language.
+
+### 🧱 Phase 8 — Polish & deploy (after features)
+
+- Tests, rate-limit/anti-abuse, structured logging, Docker, optional self-hosted Bot API
+  server for >50 MB / >20 MB files.
 
 ### Dependencies — all added
 - ✅ `rapidfuzz` (Phase 2), `ddgs` (Phase 4), `yt-dlp` (Phase 5). `ffmpeg`+`ffprobe` installed.

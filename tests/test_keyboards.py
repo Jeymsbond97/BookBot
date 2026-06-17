@@ -33,9 +33,24 @@ def _assert_ok(markup: InlineKeyboardMarkup) -> None:
 def test_simple_keyboards_build():
     _assert_ok(k.format_keyboard())
     _assert_ok(k.main_menu_keyboard())
+    _assert_ok(k.main_menu_keyboard("uz"))
     _assert_ok(k.categories_keyboard([{"name_uz": "Psixologiya", "slug": "psychology"}]))
     _assert_ok(k.offer_keyboard("book-1"))
     _assert_ok(k.card_keyboard("db", "book-1"))
+
+
+def test_language_and_browse_keyboards():
+    _assert_ok(k.language_keyboard(None))
+    _assert_ok(k.language_keyboard("uz"))
+    # browse list: page 1 with a next page → both nav arrows + a categories button.
+    _assert_ok(k.browse_keyboard(["a", "b"], "psychology", page=1, has_next=True))
+    _assert_ok(k.browse_keyboard(["a"], "psychology", page=0, has_next=False))
+
+
+def test_admin_keyboards_build():
+    cats = [{"name_uz": "Psixologiya", "slug": "psychology"}]
+    _assert_ok(k.admin_categories_keyboard(cats))
+    _assert_ok(k.admin_language_keyboard())
 
 
 def test_results_keyboard_with_pagination():

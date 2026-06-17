@@ -35,6 +35,49 @@ def get_categories() -> list[dict]:
     return res.data or []
 
 
+def get_category(slug: str) -> dict | None:
+    """Return one category row by slug (id + localized names), or None."""
+    client = get_client()
+    res = (
+        client.table("categories")
+        .select("id, slug, name_uz, name_en")
+        .eq("slug", slug)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
+def set_book_category(book_id: str, slug: str) -> None:
+    """Tag a book with a category (idempotent). No-op if the slug is unknown."""
+    cat = get_category(slug)
+    if not cat:
+        return
+    get_client().table("book_categories").upsert(
+        {"book_id": book_id, "category_id": cat["id"]},
+        on_conflict="book_id,category_id",
+    ).execute()
+
+
+def browse_books(
+    slug: str,
+    limit: int,
+    offset: int,
+    fmt: str | None = None,
+    language: str | None = None,
+) -> list[SearchResult]:
+    """Call the ``browse_books`` Postgres function — books in a category.
+
+    ``fmt`` / ``language`` filter exactly like :func:`search_books` (None = any).
+    """
+    client = get_client()
+    res = client.rpc(
+        "browse_books",
+        {"cat_slug": slug, "lang": language, "fmt": fmt, "lim": limit, "off": offset},
+    ).execute()
+    return [SearchResult.from_row(row) for row in (res.data or [])]
+
+
 # ── Search & reads (bot) ─────────────────────────────────────────────────────
 def search_books(
     query: str,

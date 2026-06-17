@@ -15,3 +15,13 @@ class Flow(StatesGroup):
 
     choosing_format = State()
     searching = State()
+
+
+class AdminUpload(StatesGroup):
+    """Admin PDF upload wizard (Phase 7): admin sends a PDF, then the bot asks
+    for title → author → category → language before storing it in the catalog."""
+
+    title = State()
+    author = State()
+    category = State()
+    language = State()

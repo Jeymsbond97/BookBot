@@ -16,8 +16,11 @@ New strategy:
 
 from __future__ import annotations
 
+import io
 import logging
 import re
+import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
@@ -32,6 +35,7 @@ name = "pdf_web"
 fmt = "pdf"
 
 _PDF_MAGIC = b"%PDF"
+_ZIP_MAGIC = b"PK\x03\x04"
 _MIN_PDF_BYTES = 30_000  # below this it's almost certainly not a book
 # Many free book sites reject non-browser requests (403) or require a Referer on
 # their download endpoints, so present as a real browser.
@@ -56,8 +60,9 @@ def _with_referer(url: str) -> dict:
 # *book page* surfaces (general queries tend to return their category/home pages),
 # and we know how to extract the PDF from them.
 _RELIABLE_SITES = (
+    "avloniy.uz",   # Avloniy digital library — real downloadable PDFs (best source)
+    "pdfbox.uz",    # serves the PDF inside a ZIP (handled in _pdf_from_zip)
     "mykitob.uz",
-    "kitobxon.com",
     "ziyouz.com",
     "n.ziyouz.com",
     "qr.natlib.uz",
@@ -88,10 +93,11 @@ _BLOCKED = (
     "11zon.com", "pandatoolz", "ilovepdf", "smallpdf", "pdfdrive.to",
     "uslegalforms", "tgstat.com", "t.me", "youtube.com", "facebook.com",
     "instagram.com", "play.google", "books.google", "amazon.",
+    "apkpure", "olcha.uz", "prezi.com", "cyberleninka", "abituriyentlar.uz",
 )
 # Known free Uzbek e-book sites — ranked first when present.
 _FREE_BOOST = (
-    "mykitob.uz", "pdfbox.uz", "mutolaa.com", "kitobxon.com", "kitobxon.uz",
+    "avloniy.uz", "mykitob.uz", "pdfbox.uz",
     "ziyouz.com", "n.ziyouz.com", "ziyonet.uz", "n.ziyonet.uz", "qr.natlib.uz",
     "natlib.uz", "unilibrary.uz", "kitoblar", "ekitob", "e-kitob",
     "asaxiykutubxona", "kutubxona", "oasap.uz", "uzbekkino",
@@ -112,12 +118,20 @@ def _domain(url: str) -> str:
         return ""
 
 
-def _raw_search(query: str, max_results: int) -> list[dict]:
-    try:
-        return DDGS().text(query, max_results=max_results)
-    except Exception:
-        log.warning("ddgs search failed for %r", query, exc_info=True)
-        return []
+def _raw_search(query: str, max_results: int, retries: int = 2) -> list[dict]:
+    """Run one DuckDuckGo query. DDGS rate-limits bursts of concurrent queries
+    (raising), which silently dropped good sources (avloniy/pdfbox) from the
+    results. Retry on *exception* (rate-limit) with backoff; a genuinely empty
+    result returns [] without retrying."""
+    for attempt in range(retries + 1):
+        try:
+            return DDGS().text(query, max_results=max_results)
+        except Exception:
+            if attempt < retries:
+                time.sleep(0.8 * (attempt + 1))
+                continue
+            log.warning("ddgs search failed for %r", query, exc_info=True)
+    return []
 
 
 def _clean_title(raw: str, fallback: str) -> str:
@@ -133,7 +147,9 @@ def search_candidates(title: str, language: str = "uz", limit: int = 6) -> list[
     # Run the queries concurrently so adding more reliable sites doesn't slow the
     # search down (capped concurrency to stay friendly with DuckDuckGo).
     raw: list[dict] = []
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    # Cap concurrency low: DuckDuckGo rate-limits bursts, and a throttled query
+    # returns nothing — which previously dropped the best free-PDF sources.
+    with ThreadPoolExecutor(max_workers=3) as ex:
         for res in ex.map(lambda q: _raw_search(q, 6), queries):
             raw += res
 
@@ -226,6 +242,32 @@ def _try_download(url: str, max_bytes: int) -> bytes | None:
         return data
     if "pdf" in ctype and _PDF_MAGIC in data[:1024] and len(data) >= _MIN_PDF_BYTES:
         return data
+    # Many free Uzbek book sites (pdfbox.uz, …) serve the PDF inside a ZIP.
+    if data[:4] == _ZIP_MAGIC:
+        return _pdf_from_zip(data, max_bytes)
+    return None
+
+
+def _pdf_from_zip(data: bytes, max_bytes: int) -> bytes | None:
+    """Return the largest valid PDF inside a downloaded ZIP, or None."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except Exception:
+        return None
+    members = sorted(
+        (i for i in zf.infolist() if i.filename.lower().endswith(".pdf")),
+        key=lambda i: i.file_size,
+        reverse=True,
+    )
+    for info in members:
+        if info.file_size > max_bytes or info.file_size < _MIN_PDF_BYTES:
+            continue
+        try:
+            content = zf.read(info)
+        except Exception:
+            continue
+        if content[:4] == _PDF_MAGIC:
+            return content
     return None
 
 

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# BookBot'ni ishga tushirish — venv'ni o'zi ishlatadi, activate shart emas.
+cd "$(dirname "$0")"
+exec .venv/bin/python -m bookbot.bot.main "$@"

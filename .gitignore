@@ -27,6 +27,10 @@ downloads/
 *.mp3
 *.epub
 
+# Reference screenshots (third-party bot UI — local reference only)
+example/
+Screenshot *.png
+
 # OS / editor
 .DS_Store
 .idea/

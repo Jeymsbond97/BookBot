@@ -36,3 +36,22 @@ async def search_page(
     has_next = len(rows) > PAGE_SIZE
     page_rows = ranking.rerank(query, rows[:PAGE_SIZE])
     return page_rows, has_next
+
+
+async def browse_page(
+    slug: str,
+    page: int,
+    fmt: str | None = None,
+    language: str | None = None,
+) -> tuple[list[SearchResult], bool]:
+    """Return (books_for_page, has_next_page) for a category (0-indexed page).
+
+    Like :func:`search_page` but lists a category instead of a text query; rows
+    are already newest-first from the DB, so no relevance re-ranking is applied.
+    """
+    offset = page * PAGE_SIZE
+    rows = await asyncio.to_thread(
+        db.browse_books, slug, PAGE_SIZE + 1, offset, fmt, language
+    )
+    has_next = len(rows) > PAGE_SIZE
+    return rows[:PAGE_SIZE], has_next
