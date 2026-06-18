@@ -45,7 +45,8 @@ class ChannelCandidate:
     size_bytes: int
     is_audio: bool
     duration: int = 0     # seconds (audio only)
-    channel: str = ""     # source channel ref (for display)
+    channel: str = ""     # source channel ref (internal; never shown to users)
+    caption: str = ""     # source message text — real metadata to ground the AI
 
     @property
     def size_mb(self) -> float:
@@ -119,6 +120,7 @@ def _to_candidate(msg, fmt: str, channel: str) -> ChannelCandidate | None:
         is_audio=fmt != "pdf",
         duration=(audio.duration if audio else 0) or 0,
         channel=channel,
+        caption=(msg.message or "").strip(),
     )
 
 

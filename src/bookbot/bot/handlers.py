@@ -427,7 +427,8 @@ async def _search_channels(status: Message, state: FSMContext, query: str, fmt: 
         candidates=[
             {"chat_id": c.chat_id, "message_id": c.message_id, "title": c.title,
              "size_bytes": c.size_bytes, "is_audio": c.is_audio,
-             "duration": c.duration, "duration_str": c.duration_str, "channel": c.channel}
+             "duration": c.duration, "duration_str": c.duration_str,
+             "channel": c.channel, "caption": c.caption}
             for c in cands
         ],
     )
@@ -505,8 +506,11 @@ async def _send_channel(message: Message, state: FSMContext, index: int) -> None
 
     status = await message.answer(texts.SENDING)
 
-    # AI tasnif (5-6 jumla) + author/genre/language/cover — attached to the file.
-    desc, cover, genre, language, author = await _enrich(title, None)
+    # AI tasnif (5-6 jumla) + author/genre/language/cover — grounded in the source
+    # channel caption + web snippets so it's accurate, not invented.
+    desc, cover, genre, language, author = await _enrich(
+        title, None, context=cand.get("caption", "")
+    )
     language = language or get_settings().default_language
     size_mb = (cand.get("size_bytes") or 0) / (1024 * 1024)
     caption = cards.build_card(
@@ -746,10 +750,10 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 async def _enrich(title, author, *, description=None, cover_url=None, genre=None,
-                  language=None):
-    """Fill gaps: cover/language from OpenLibrary, description/genre from OpenAI —
-    run concurrently (so the card isn't slowed by two sequential network calls).
-    Returns (description, cover_url, genre, language, author)."""
+                  language=None, context=""):
+    """Fill gaps: cover/language from OpenLibrary, description/genre/author from OpenAI
+    (grounded in ``context`` — e.g. the source channel caption — + web snippets) —
+    run concurrently. Returns (description, cover_url, genre, language, author)."""
     # Drop scraped SEO junk / placeholder covers up front so the clean AI
     # description and a real OpenLibrary cover are fetched to replace them.
     description = textclean.clean_description(description)
@@ -760,12 +764,12 @@ async def _enrich(title, author, *, description=None, cover_url=None, genre=None
     if want_ol and want_ai:
         ol, ai = await asyncio.gather(
             asyncio.to_thread(metadata.lookup, title, author, with_description=False),
-            asyncio.to_thread(ai_meta.lookup, title, author),
+            asyncio.to_thread(ai_meta.lookup, title, author, context),
         )
     elif want_ol:
         ol = await asyncio.to_thread(metadata.lookup, title, author, with_description=False)
     elif want_ai:
-        ai = await asyncio.to_thread(ai_meta.lookup, title, author)
+        ai = await asyncio.to_thread(ai_meta.lookup, title, author, context)
     if ol:
         cover_url = cover_url or ol.cover_url
         language = language or ol.language
