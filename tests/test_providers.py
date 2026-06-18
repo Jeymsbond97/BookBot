@@ -104,7 +104,19 @@ def test_build_card_includes_fields():
 
 def test_build_card_shows_genre():
     card = cards.build_card(title="X", fmt="pdf", genre="Roman")
-    assert "Janr: Roman" in card.text
+    assert "🏷 Roman" in card.text
+
+
+def test_build_card_shows_size():
+    card = cards.build_card(title="X", fmt="pdf", size_mb=6.94)
+    assert "📊 6.9 MB" in card.text
+
+
+def test_build_card_badges_on_one_line():
+    card = cards.build_card(title="X", fmt="pdf", genre="Diniy", language="uz")
+    # genre · language · format collapse into a single line.
+    badge_line = next(ln for ln in card.text.splitlines() if "🏷" in ln)
+    assert "🏷 Diniy" in badge_line and "🌐" in badge_line and "📄 PDF" in badge_line
 
 
 def test_build_card_clips_long_description():

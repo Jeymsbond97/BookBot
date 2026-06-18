@@ -2,15 +2,26 @@
 
 A card is shown after the user picks a search result / variant, before the file
 is sent — for both PDF and audio. Fields come from the catalog and/or the
-OpenLibrary metadata provider; every field is optional and the card adapts.
+metadata providers; every field is optional and the card hides what it lacks.
+
+Layout (Phase 9b — clean, ordered, one idea per line):
+
+    [cover]
+    📖 <b>Til ofatlari</b>
+    ✍️ Abu Homid G'azzoliy
+    🏷 Diniy  ·  🌐 O'zbekcha  ·  📄 PDF
+    ⏱ 4:42:59   ·   📊 6.9 MB
+    🔗 mykitob.uz
+
+    <i>Toza, to'liq AI tavsif — 2-3 jumla.</i>
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-_FMT = {"pdf": "📕 PDF", "mp3": "🎧 Audio"}
-_LANG = {"uz": "🇺🇿 O'zbekcha", "en": "🇬🇧 Inglizcha", "ru": "🇷🇺 Ruscha", "tr": "🇹🇷 Turkcha"}
+_FMT = {"pdf": "📄 PDF", "mp3": "🎧 Audio"}
+_LANG = {"uz": "O'zbekcha", "en": "Inglizcha", "ru": "Ruscha", "tr": "Turkcha"}
 _CAPTION_LIMIT = 1000  # Telegram photo-caption cap is 1024; leave headroom.
 
 
@@ -27,6 +38,12 @@ def _clip(desc: str, budget: int) -> str:
     return desc[: budget - 1].rsplit(" ", 1)[0] + "…"
 
 
+def _fmt_size(size_mb: float | None) -> str | None:
+    if not size_mb or size_mb <= 0:
+        return None
+    return f"{size_mb:.1f} MB" if size_mb < 100 else f"{size_mb:.0f} MB"
+
+
 def build_card(
     *,
     title: str,
@@ -38,19 +55,32 @@ def build_card(
     duration: str | None = None,
     site: str | None = None,
     genre: str | None = None,
+    size_mb: float | None = None,
 ) -> Card:
     """Assemble a card caption + optional cover image url."""
-    emoji = "📕" if fmt == "pdf" else "🎧"
-    lines = [f"{emoji} <b>{title}</b>"]
+    lines = [f"📖 <b>{title.strip()}</b>"]
     if author:
         lines.append(f"✍️ {author}")
-    lines.append(f"🏷 {_FMT.get(fmt, fmt)}")
+
+    # One tidy line: genre · language · format (in that fixed order, skip empties).
+    badges = []
     if genre:
-        lines.append(f"📚 Janr: {genre}")
+        badges.append(f"🏷 {genre}")
     if language:
-        lines.append(f"🌐 {_LANG.get(language, language)}")
+        badges.append(f"🌐 {_LANG.get(language, language)}")
+    badges.append(_FMT.get(fmt, fmt))
+    lines.append("  ·  ".join(badges))
+
+    # A second stats line: duration (audio) · size, only if present.
+    stats = []
     if duration:
-        lines.append(f"⏱ {duration}")
+        stats.append(f"⏱ {duration}")
+    size = _fmt_size(size_mb)
+    if size:
+        stats.append(f"📊 {size}")
+    if stats:
+        lines.append("   ·   ".join(stats))
+
     if site:
         lines.append(f"🔗 {site}")
 

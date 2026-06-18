@@ -3,7 +3,7 @@
 > 🇺🇿 Bu fayl — qayerga kelganimiz va nima qolganini ko'rsatadi. Ertaga shu yerdan davom etamiz.
 > To'liq loyiha tavsifi: **README.md**. Bosqichlar ro'yxati: README §16 (Build Roadmap).
 
-_Last updated: 2026-06-17 (Phase 6 + 7 done; PDF fetch fixes; redesign/feature plan added below)_
+_Last updated: 2026-06-18 (Phase 9a card bug fixes + 9b card redesign done; next: 9c feature parity)_
 
 ### 🔧 PDF fetch reliability fixes (2026-06-17)
 
@@ -240,7 +240,43 @@ Addresses the 4 issues raised after testing:
 > User wants ours to be **even better**. Tomorrow: fix the card bugs first, then redesign the
 > card, then build feature parity + our edge (auto-fetch from the web, which MyKitobBot lacks).
 
-### 🐞 Phase 9a — Card bug fixes ← _START HERE NEXT (quick wins)_
+### ✅ Phase 9a — Card bug fixes (DONE, 2026-06-18)
+
+New pure module `src/bookbot/bot/textclean.py` (+ `tests/test_textclean.py`) fixes
+the scraped-data bugs; wired into `handlers._enrich` / `_show_card` / `_send_web_pdf`:
+- `clean_title()` — strips "- yuklab olish!", " pdf", "[PDF]", "skachat", mp3/epub
+  suffixes and **Title-Cases** uz-aware (`o'tkan kunlar` → `O'tkan Kunlar`,
+  `g'azzoliy` keeps the digraph). Applied to DB/PDF/YT card titles + the saved
+  catalog title.
+- `clean_description()` / `is_junk_description()` — rejects SEO junk ("yuklab olish",
+  "kitoblar bo", truncated mid-word, <25 chars) so the **clean AI description wins**
+  (`_enrich` now nulls junk before deciding whether to call OpenAI).
+- `clean_cover()` / `is_placeholder_cover()` — blacklists `default-images`,
+  `document-books-image`, `no-image`, `placeholder` → falls back to OpenLibrary
+  cover or a clean text card.
+
+### ✅ Phase 9b — Card redesign (DONE, 2026-06-18)
+
+Rebuilt `cards.build_card` to the target layout — ordered, one idea per line, no
+duplicate/ugly emoji:
+```
+📖 <b>Til Ofatlari</b>
+✍️ Abu Homid G'azzoliy
+🏷 Diniy  ·  🌐 O'zbekcha  ·  📄 PDF
+⏱ 4:42:59   ·   📊 6.9 MB
+🔗 mykitob.uz
+
+<i>Toza, to'liq AI tavsif.</i>
+```
+- Genre · language · format collapse onto **one** badge line; duration · size onto a
+  stats line; empty fields hidden. `_LANG` no longer doubles the globe emoji.
+- New optional `size_mb` param (ready for 9c stats); 37 tests pass, ruff clean.
+- ⏳ _Live check:_ restart bot → search "til ofatlari" (pdf) → card shows clean
+  Title-Cased name + clean AI description + real/absent cover (no placeholder).
+
+### 🚀 Phase 9c — Feature parity with MyKitobBot ← _START HERE NEXT (needs new DB tables)_
+
+<details><summary>Original 9a bug list (kept for reference)</summary>
 
 Confirmed bugs on the detail card (see user complaint + repro 2026-06-17):
 
@@ -261,28 +297,12 @@ Confirmed bugs on the detail card (see user complaint + repro 2026-06-17):
    - **Fix:** blacklist known placeholder cover URLs (`default-images`, `no-image`,
      `placeholder`) → treat as no cover → fall back to OpenLibrary cover or a clean text card.
 4. **Design is ugly / inconsistent ("tartib yo'q", bad emoji).**
-   - **Fix:** redesign `cards.build_card` (see 9b).
+   - **Fix:** redesign `cards.build_card` (done in 9b).
 
-### 🎨 Phase 9b — Card & UX redesign
+The 9c card still wants `⬇️ downloads` / `❤️ likes` on the stats line — those land
+once the tables below exist (`size_mb` param is already wired into `build_card`).
 
-Match/beat MyKitobBot's card. Target layout (clean, ordered, one emoji per line):
-```
-[cover]
-📖 <b>Til ofatlari</b>
-✍️ Abu Homid G'azzoliy
-🏷 Diniy  ·  🌐 O'zbekcha  ·  📄 PDF
-📊 6.9 MB   ⬇️ 142 marta   ❤️ 31
-
-<i>Toza, to'liq AI tavsif (Tasnif) — 2-3 jumla.</i>
-
-[ 📥 Yuborish ]
-[ ❤️ Like   ⭐️ Baho   💬 Izoh ]
-[ ⬅️ Orqaga ]
-```
-- Consistent Uzbek labels, no duplicate/ugly emoji, fields in a fixed order, hide empty fields.
-- Review all of `texts.py` for consistent tone + capitalization.
-
-### 🚀 Phase 9c — Feature parity with MyKitobBot (needs new DB tables)
+</details>
 
 New tables: `users`, `downloads`, `likes`, `comments`, `ratings`, `user_activity` (points).
 

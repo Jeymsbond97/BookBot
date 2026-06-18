@@ -30,7 +30,7 @@ from .. import db
 from ..categories import category_for_genre
 from ..config import get_settings
 from ..providers import ai_meta, metadata, pdf_web, youtube_audio
-from . import cards, delivery, ranking, texts
+from . import cards, delivery, ranking, textclean, texts
 from .keyboards import (
     AdminCatCB,
     AdminLangCB,
@@ -455,7 +455,8 @@ async def _send_web_pdf(message: Message, state: FSMContext, index: int) -> None
     cands = data.get("candidates") or []
     if not (0 <= index < len(cands)) or data.get("cand_kind") != "pdf":
         return
-    query = data.get("query", cands[index]["title"])
+    raw_query = data.get("query", cands[index]["title"])
+    query = textclean.clean_title(raw_query) or raw_query
     max_bytes = get_settings().max_file_bytes
     default_lang = get_settings().default_language
 
@@ -571,7 +572,8 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
             await asyncio.to_thread(db.update_book_meta, ref, description=description,
                                     cover_url=cover_url)
         card = cards.build_card(
-            title=book["title"], fmt=fmt, author=author, language=language,
+            title=textclean.clean_title(book["title"]) or book["title"],
+            fmt=fmt, author=author, language=language,
             description=description, cover_url=cover_url, genre=genre,
         )
 
@@ -582,7 +584,7 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
             await message.answer(texts.NOT_FOUND)
             return
         cand = cands[idx]
-        title = query or cand["title"]
+        title = textclean.clean_title(query or cand["title"]) or cand["title"]
         # One page fetch → the page's own cover/description/genre + the PDF link(s),
         # which we cache so the confirm step doesn't fetch the page again.
         pmeta, links = await asyncio.to_thread(pdf_web.page_info, cand["url"], title)
@@ -612,7 +614,7 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
             await message.answer(texts.NOT_FOUND)
             return
         cand = cands[idx]
-        title = query or cand["title"]
+        title = textclean.clean_title(query or cand["title"]) or cand["title"]
         desc, cover, genre, language, author = await _enrich(
             title, cand.get("uploader"))
         cand["genre"] = genre
@@ -645,6 +647,10 @@ async def _enrich(title, author, *, description=None, cover_url=None, genre=None
     """Fill gaps: cover/language from OpenLibrary, description/genre from OpenAI —
     run concurrently (so the card isn't slowed by two sequential network calls).
     Returns (description, cover_url, genre, language, author)."""
+    # Drop scraped SEO junk / placeholder covers up front so the clean AI
+    # description and a real OpenLibrary cover are fetched to replace them.
+    description = textclean.clean_description(description)
+    cover_url = textclean.clean_cover(cover_url)
     want_ol = (not cover_url) or (not language) or (not author)
     want_ai = (not description) or (not genre)
     ol = ai = None
