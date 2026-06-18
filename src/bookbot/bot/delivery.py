@@ -78,7 +78,13 @@ async def deliver_book(message: Message, book_id: str, fmt: str) -> bool:
         return False
 
     book = await asyncio.to_thread(db.get_book, book_id)
-    caption = _caption(book, target.format)
+    # PDFs (single message) carry the full rich caption with the description; audio
+    # is sent in parts, so it keeps a short per-part caption.
+    caption = (
+        _rich_caption(book, target.format, target.size_bytes)
+        if target.format == "pdf"
+        else _caption(book, target.format)
+    )
 
     # 1) Cached file_id → instant re-send. Audio may hold comma-joined part ids.
     if target.telegram_file_id:

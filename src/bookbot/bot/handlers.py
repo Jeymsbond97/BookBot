@@ -460,7 +460,7 @@ async def _search_web_pdf(status: Message, state: FSMContext, query: str) -> Non
     lines = [texts.pdf_variant_line(i + 1, c.title, c.site) for i, c in enumerate(cands)]
     await status.edit_text(
         texts.pdf_variants_header(query) + "\n\n" + "\n".join(lines),
-        reply_markup=candidates_keyboard("pdf", len(cands)),
+        reply_markup=candidates_keyboard("pdf", len(cands), direct=True),
         disable_web_page_preview=True,
     )
 
@@ -487,7 +487,7 @@ async def _search_youtube(status: Message, state: FSMContext, query: str) -> Non
     ]
     await status.edit_text(
         texts.youtube_variants_header(query) + "\n\n" + "\n".join(lines),
-        reply_markup=candidates_keyboard("yt", len(cands)),
+        reply_markup=candidates_keyboard("yt", len(cands), direct=True),
     )
 
 
@@ -568,41 +568,34 @@ async def _send_web_pdf(message: Message, state: FSMContext, index: int) -> None
     default_lang = get_settings().default_language
 
     status = await message.answer(texts.DOWNLOADING_PDF)
-    # The card step already resolved the picked candidate's PDF link(s); reuse them
-    # (fast — no second page fetch). Then fall through to other candidates so the
-    # user still gets a free PDF if their pick is a dead/blocked link.
-    picked = cands[index]
+    # Download the picked candidate, falling through to the others so the user still
+    # gets a free PDF if their pick is a dead/blocked link.
     content, used = None, None
-    if picked.get("pdf_links"):
-        content = await asyncio.to_thread(pdf_web.download_links, picked["pdf_links"], max_bytes)
+    for i in [index] + [j for j in range(len(cands)) if j != index]:
+        content = await asyncio.to_thread(
+            pdf_web.download_validate, cands[i]["url"], max_bytes, query
+        )
         if content is not None:
-            used = picked
-    if content is None:
-        for i in [index] + [j for j in range(len(cands)) if j != index]:
-            content = await asyncio.to_thread(
-                pdf_web.download_validate, cands[i]["url"], max_bytes, query
-            )
-            if content is not None:
-                used = cands[i]
-                break
-
+            used = cands[i]
+            break
     if content is None:
         await status.edit_text(texts.DOWNLOAD_FAILED)
         return
 
-    m = used.get("meta") or {}
+    # Grounded AI description/genre/author + cover — attached to the file on delivery.
+    desc, cover, genre, language, author = await _enrich(query, None)
     book_id = await asyncio.to_thread(
         db.save_pdf_book,
         query,
         content,
-        author=m.get("author"),
-        language=m.get("language") or default_lang,
+        author=author,
+        language=language or default_lang,
         source="web",
         source_ref=used["url"],
-        description=m.get("description"),
-        cover_url=m.get("cover_url"),
+        description=desc,
+        cover_url=cover,
     )
-    slug = category_for_genre(m.get("genre"))
+    slug = category_for_genre(genre)
     if slug:
         await asyncio.to_thread(db.set_book_category, book_id, slug)
     await status.delete()
@@ -632,9 +625,9 @@ async def _send_youtube(message: Message, state: FSMContext, index: int) -> None
             await status.edit_text(texts.DOWNLOAD_FAILED)
             return
 
-        meta = await asyncio.to_thread(metadata.lookup, query)
-        title = meta.title if meta else cand["title"]
-        performer = meta.author_str if meta else cand.get("uploader")
+        title = textclean.clean_title(query or cand["title"]) or cand["title"]
+        desc, cover, genre, language, author = await _enrich(title, cand.get("uploader"))
+        performer = author or cand.get("uploader")
         await status.delete()
 
         file_ids = await delivery.send_audio_parts(message, parts, title, performer)
@@ -644,14 +637,14 @@ async def _send_youtube(message: Message, state: FSMContext, index: int) -> None
             title,
             youtube_id=cand["video_id"],
             telegram_file_ids=file_ids,
-            author=meta.author_str if meta else None,
-            language=(meta.language if meta and meta.language else settings.default_language),
+            author=author,
+            language=language or settings.default_language,
             source_ref=f"https://www.youtube.com/watch?v={cand['video_id']}",
-            description=meta.description if meta else None,
-            cover_url=meta.cover_url if meta else None,
+            description=desc,
+            cover_url=cover,
             size_bytes=total_bytes,
         )
-        slug = category_for_genre(cand.get("genre"))
+        slug = category_for_genre(genre)
         if slug:
             await asyncio.to_thread(db.set_book_category, book_id, slug)
     finally:
@@ -660,78 +653,30 @@ async def _send_youtube(message: Message, state: FSMContext, index: int) -> None
 
 # ── Detail card rendering ─────────────────────────────────────────────────────
 async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -> None:
-    """Build and show the detail card for a DB book or an internet variant."""
-    data = await state.get_data()
-    fmt = data.get("fmt", "pdf")
-    query = data.get("query", "")
+    """Build and show the detail card for a DB book (exact hit or list pick).
 
-    if kind == "db":
-        book = await asyncio.to_thread(db.get_book, ref)
-        if not book:
-            await message.answer(texts.FILE_MISSING)
-            return
-        description, cover_url = book.get("description"), book.get("cover_url")
-        author, language, genre = book.get("author"), book.get("language"), None
-        description, cover_url, genre, language, author = await _enrich(
-            book["title"], author, description=description, cover_url=cover_url,
-            genre=genre, language=language)
-        if description and not book.get("description"):  # persist for next time
-            await asyncio.to_thread(db.update_book_meta, ref, description=description,
-                                    cover_url=cover_url)
-        card = cards.build_card(
-            title=textclean.clean_title(book["title"]) or book["title"],
-            fmt=fmt, author=author, language=language,
-            description=description, cover_url=cover_url, genre=genre,
-        )
+    Internet (web PDF / YouTube) and Telegram-channel results skip the card and
+    deliver on the first tap; only DB books — which deliver instantly anyway — get
+    the card + 📥 confirm."""
+    fmt = (await state.get_data()).get("fmt", "pdf")
 
-    elif kind == "pdf":
-        cands = data.get("candidates") or []
-        idx = int(ref)
-        if not (0 <= idx < len(cands)):
-            await message.answer(texts.NOT_FOUND)
-            return
-        cand = cands[idx]
-        title = textclean.clean_title(query or cand["title"]) or cand["title"]
-        # One page fetch → the page's own cover/description/genre + the PDF link(s),
-        # which we cache so the confirm step doesn't fetch the page again.
-        pmeta, links = await asyncio.to_thread(pdf_web.page_info, cand["url"], title)
-        cand["pdf_links"] = links
-        cands[idx] = cand
-        await state.update_data(candidates=cands)
-
-        cover = pmeta.cover_url if pmeta else None
-        desc = pmeta.description if pmeta else None
-        genre = pmeta.genre if pmeta else None
-        author = pmeta.author_str if pmeta else None
-        desc, cover, genre, language, author = await _enrich(
-            title, author, description=desc, cover_url=cover, genre=genre, language="uz")
-        cand["meta"] = {"author": author, "language": language,
-                        "description": desc, "cover_url": cover, "genre": genre}
-        cands[idx] = cand
-        await state.update_data(candidates=cands)
-        card = cards.build_card(
-            title=title, fmt="pdf", author=author, language=language,
-            description=desc, cover_url=cover, genre=genre, site=cand.get("site"),
-        )
-
-    else:  # kind == "yt"
-        cands = data.get("candidates") or []
-        idx = int(ref)
-        if not (0 <= idx < len(cands)):
-            await message.answer(texts.NOT_FOUND)
-            return
-        cand = cands[idx]
-        title = textclean.clean_title(query or cand["title"]) or cand["title"]
-        desc, cover, genre, language, author = await _enrich(
-            title, cand.get("uploader"))
-        cand["genre"] = genre
-        cands[idx] = cand
-        await state.update_data(candidates=cands)
-        card = cards.build_card(
-            title=title, fmt="mp3", author=author, language=language,
-            description=desc, cover_url=cover, genre=genre,
-            duration=cand.get("duration_str"),
-        )
+    book = await asyncio.to_thread(db.get_book, ref)
+    if not book:
+        await message.answer(texts.FILE_MISSING)
+        return
+    description, cover_url = book.get("description"), book.get("cover_url")
+    author, language, genre = book.get("author"), book.get("language"), None
+    description, cover_url, genre, language, author = await _enrich(
+        book["title"], author, description=description, cover_url=cover_url,
+        genre=genre, language=language)
+    if description and not book.get("description"):  # persist for next time
+        await asyncio.to_thread(db.update_book_meta, ref, description=description,
+                                cover_url=cover_url)
+    card = cards.build_card(
+        title=textclean.clean_title(book["title"]) or book["title"],
+        fmt=fmt, author=author, language=language,
+        description=description, cover_url=cover_url, genre=genre,
+    )
 
     kb = card_keyboard(kind, ref)
     # The picked-from message is text; a card may be a photo → replace it.

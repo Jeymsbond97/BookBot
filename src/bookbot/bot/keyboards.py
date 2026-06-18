@@ -212,9 +212,9 @@ def offer_keyboard(book_id: str) -> InlineKeyboardMarkup:
 def candidates_keyboard(kind: str, count: int, direct: bool = False) -> InlineKeyboardMarkup:
     """Numbered buttons (1..count) for variants.
 
-    ``direct=True`` → tapping a number sends the file straight away (SendCB), used
-    for Telegram-channel results where the file is already in hand (no card step).
-    Otherwise it opens a detail card first (CardCB) — used for web/YouTube.
+    ``direct=True`` → tapping a number fetches + sends straight away (SendCB), used
+    for all fetched results (Telegram channels, web PDF, YouTube) so there's no
+    extra card→confirm tap. ``direct=False`` opens a detail card first (CardCB).
     """
     kb = InlineKeyboardBuilder()
     for i in range(count):
