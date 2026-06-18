@@ -3,7 +3,32 @@
 > 🇺🇿 Bu fayl — qayerga kelganimiz va nima qolganini ko'rsatadi. Ertaga shu yerdan davom etamiz.
 > To'liq loyiha tavsifi: **README.md**. Bosqichlar ro'yxati: README §16 (Build Roadmap).
 
-_Last updated: 2026-06-18 (9a/9b cards done; Phase T Telegram-first fetch BUILT — needs migration 0003 + live test; then 9c)_
+_Last updated: 2026-06-18 EOD (9a/9b cards + Phase T Telegram-first fetch DONE & live-tested; next: audio live test + 9c)_
+
+### 📌 Resume here tomorrow (2026-06-19)
+
+Phase T (Telegram-first fetch) is **built, migrated (0003 applied in Supabase), and live-tested
+for PDF**. Today's live-feedback fixes are all done & committed (12 commits, pushed):
+- Hidden source channel everywhere; one-tap delivery for **all** fetched sources (channels /
+  web PDF / YouTube) — no card→confirm step; card kept only for DB hits.
+- AI descriptions now **grounded** (web snippets + channel caption) — accurate, not invented;
+  5-6 sentence review style + author. Card layout: genre & language each on own line.
+- `REBRAND_FILES=false` (instant forward; filename keeps source tag, caption clean) — flip to
+  `true` on deploy for clean filenames (slow on the local throttled net, fast on a server).
+- Telethon noise silenced (`receive_updates=False` + logger ERROR).
+- **10 source channels** added to `.env` (PDF + audio): @ovozli_kutubxona, @Online_kutubxonala,
+  @mykitobuz, @audio_kitobxona, @audiokitoblar_uz, @kitob_nuri, @audiokitob_eshitamiz,
+  @audio_toplam, @nuur_uz, @kitoblar_pdf. (2nd account must be JOINED to each.)
+- Multi-part audiobooks now **ordered 1,2,3…** (`_part_no`) + closest match first; **all results
+  paginated** 8/page (CandPageCB), concurrent channel search.
+
+**TODO next session:**
+1. ⏳ Live-test **audio** in Telegram (🎧 mode → e.g. "amir temur") — confirm ordered parts,
+   pagination, one-tap delivery of a big audiobook (no 50 MB issue via copy).
+2. Then **Phase 9c** — feature parity: users/downloads/likes/comments/ratings tables, `/myprofile`,
+   `/top`, `/toplike`, `/topoquvchi`, points/levels, inline search.
+3. On deploy: set `REBRAND_FILES=true`; consider self-hosted Bot API only if copy-delivery ever
+   hits a limit (it shouldn't — copy has none).
 
 ### 🔧 PDF fetch reliability fixes (2026-06-17)
 
