@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -132,16 +133,52 @@ def _to_candidate(msg, fmt: str, channel: str) -> ChannelCandidate | None:
 
 
 def _score(query: str, title: str) -> float:
+    """Relevance gate — lenient (subset-friendly) so we don't drop real matches."""
     return fuzz.token_set_ratio(query.lower(), title.lower())
 
 
-async def search(
-    query: str, fmt: str, *, per_channel: int = 4, limit: int = 8, min_score: int = 55
-) -> list[ChannelCandidate]:
-    """Search every source channel for files matching ``query`` in ``fmt``.
+def _rank(query: str, title: str) -> float:
+    """Ordering score — rewards closeness (penalises extra words) so the nearest
+    title sorts first."""
+    return fuzz.token_sort_ratio(query.lower(), title.lower())
 
-    Returns title-ranked, domain-deduped candidates (best first). Empty when
-    Telethon is disabled or nothing relevant is found (caller then tries the web).
+
+# "10-Suhbat", "2-qism", "04.", "Part 3", "3-bo'lim" → the part/episode number.
+_PART_LABELLED = re.compile(
+    r"\b0*(\d{1,3})\s*[-.\s]?\s*(?:suhbat|qism|bo[\"'`’]?lim|bob|part|qism)\b", re.IGNORECASE
+)
+_PART_LEAD = re.compile(r"^\s*0*(\d{1,3})\s*[-.]")
+
+
+def _part_no(title: str) -> int:
+    """Episode/part number for ordering multi-part audiobooks (0 = none)."""
+    m = _PART_LABELLED.search(title) or _PART_LEAD.match(title)
+    return int(m.group(1)) if m else 0
+
+
+async def _search_one(client, channel: str, query: str, fmt: str, flt, per_channel: int):
+    out = []
+    try:
+        async for msg in client.iter_messages(
+            channel, search=query, filter=flt, limit=per_channel
+        ):
+            cand = _to_candidate(msg, fmt, channel)
+            if cand:
+                out.append(cand)
+    except Exception:
+        log.warning("Channel search failed for %s", channel, exc_info=True)
+    return out
+
+
+async def search(
+    query: str, fmt: str, *, per_channel: int = 12, limit: int = 48, min_score: int = 55
+) -> list[ChannelCandidate]:
+    """Search every source channel (concurrently) for files matching ``query``.
+
+    Ordering: closest title match first, and within near-equal matches the parts of
+    a multi-part book in ascending order (1, 2, 3 …) so an audiobook's episodes come
+    out in sequence. Deduped; returns up to ``limit`` (the caller paginates). Empty
+    when Telethon is disabled or nothing relevant is found.
     """
     s = get_settings()
     if not s.telethon_enabled or not s.source_channel_list:
@@ -157,34 +194,37 @@ async def search(
         # Audio files are often tagged as music; search that index too.
         filters = [InputMessagesFilterMusic, InputMessagesFilterDocument]
 
+    # Fan out all (channel × filter) searches concurrently — much faster than serial
+    # on a slow network.
+    tasks = [
+        _search_one(client, ch, query, fmt, flt, per_channel)
+        for ch in s.source_channel_list
+        for flt in filters
+    ]
     found: list[ChannelCandidate] = []
-    for channel in s.source_channel_list:
-        for flt in filters:
-            try:
-                async for msg in client.iter_messages(
-                    channel, search=query, filter=flt, limit=per_channel
-                ):
-                    cand = _to_candidate(msg, fmt, channel)
-                    if cand:
-                        found.append(cand)
-            except Exception:
-                log.warning("Channel search failed for %s", channel, exc_info=True)
+    for chunk in await asyncio.gather(*tasks, return_exceptions=False):
+        found.extend(chunk)
 
-    # Rank by title similarity; drop weak matches; dedupe by (title, size).
-    ranked = sorted(found, key=lambda c: _score(query, c.title), reverse=True)
-    out: list[ChannelCandidate] = []
+    # Gate by relevance, dedupe by (title, size), then order: relevance bucket first
+    # (closest match), then ascending part number (series in sequence), then title.
     seen: set[tuple[str, int]] = set()
-    for c in ranked:
+    kept: list[ChannelCandidate] = []
+    for c in found:
         if _score(query, c.title) < min_score:
             continue
         key = (c.title.lower(), c.size_bytes)
         if key in seen:
             continue
         seen.add(key)
-        out.append(c)
-        if len(out) >= limit:
-            break
-    return out
+        kept.append(c)
+
+    def sort_key(c: ChannelCandidate):
+        bucket = round(_rank(query, c.title) / 10) * 10  # group near-equal matches
+        part = _part_no(c.title) or 100_000  # numbered series first & in order
+        return (-bucket, part, c.title.lower())
+
+    kept.sort(key=sort_key)
+    return kept[:limit]
 
 
 async def forward_to_storage(chat_id: int, message_id: int) -> tuple[int, int]:

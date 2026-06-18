@@ -83,6 +83,13 @@ class SendCB(CallbackData, prefix="snd"):
     ref: str
 
 
+class CandPageCB(CallbackData, prefix="cpg"):
+    """Paginate a fetched-variant list (channels / web PDF / YouTube)."""
+
+    kind: str
+    page: int
+
+
 # ── Builders ──────────────────────────────────────────────────────────────────
 def format_keyboard() -> InlineKeyboardMarkup:
     """The first prompt: choose PDF or Audio."""
@@ -221,6 +228,38 @@ def candidates_keyboard(kind: str, count: int, direct: bool = False) -> InlineKe
         cb = SendCB(kind=kind, ref=str(i)) if direct else CardCB(kind=kind, ref=str(i))
         kb.button(text=str(i + 1), callback_data=cb)
     kb.adjust(5)
+    kb.row(InlineKeyboardButton(text=texts.BTN_BACK,
+                                callback_data=MenuCB(action="back_to_menu").pack()))
+    return kb.as_markup()
+
+
+CAND_PAGE_SIZE = 8  # fetched variants shown per page
+
+
+def candidates_page_keyboard(
+    kind: str, page: int, total: int, page_size: int = CAND_PAGE_SIZE
+) -> InlineKeyboardMarkup:
+    """Numbered send-buttons for ONE page of fetched variants + ◀ / ▶ nav.
+
+    Buttons map to ABSOLUTE indices in the stored candidate list, and their labels
+    are the absolute position (page 2 starts at 9), so tapping always sends the
+    right variant regardless of page."""
+    kb = InlineKeyboardBuilder()
+    start = page * page_size
+    end = min(start + page_size, total)
+    for i in range(start, end):
+        kb.button(text=str(i + 1), callback_data=SendCB(kind=kind, ref=str(i)))
+    kb.adjust(5)
+
+    nav: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(
+            text="◀️", callback_data=CandPageCB(kind=kind, page=page - 1).pack()))
+    if end < total:
+        nav.append(InlineKeyboardButton(
+            text="▶️", callback_data=CandPageCB(kind=kind, page=page + 1).pack()))
+    if nav:
+        kb.row(*nav)
     kb.row(InlineKeyboardButton(text=texts.BTN_BACK,
                                 callback_data=MenuCB(action="back_to_menu").pack()))
     return kb.as_markup()

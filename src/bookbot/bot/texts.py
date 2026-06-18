@@ -155,15 +155,24 @@ def channel_variants_header(query: str) -> str:
     )
 
 
-def channel_variant_line(n: int, title: str, size_mb: float, duration: str) -> str:
-    """One variant line — NO source channel shown (looks like it's all ours)."""
+def channel_variant_label(title: str, size_mb: float, duration: str) -> str:
+    """One variant label (no leading number) — NO source channel shown."""
     meta = []
     if duration:
         meta.append(f"⏱ {duration}")
     if size_mb:
         meta.append(f"📊 {size_mb:.1f} MB")
     tail = "  ·  ".join(meta)
-    return f"<b>{n}.</b> {title}" + (f"\n     <i>{tail}</i>" if tail else "")
+    return f"{title}" + (f"\n     <i>{tail}</i>" if tail else "")
+
+
+def pdf_variant_label(title: str, site: str) -> str:
+    return f"{title}\n     <i>{site}</i>"
+
+
+def youtube_variant_label(title: str, duration: str, uploader: str | None) -> str:
+    who = f" · {uploader}" if uploader else ""
+    return f"{title}\n     <i>⏱ {duration}{who}</i>"
 
 
 def pdf_variants_header(query: str) -> str:
@@ -178,15 +187,6 @@ def youtube_variants_header(query: str) -> str:
         f"🎧 “{query}” bo'yicha YouTube'da topildi.\n"
         "Birini tanlang — <i>yuklab olish biroz vaqt oladi (uzun audio bo'lsa bir necha daqiqa)</i> 👇"
     )
-
-
-def pdf_variant_line(n: int, title: str, site: str) -> str:
-    return f"<b>{n}.</b> {title}\n     <i>{site}</i>"
-
-
-def youtube_variant_line(n: int, title: str, duration: str, uploader: str | None) -> str:
-    who = f" · {uploader}" if uploader else ""
-    return f"<b>{n}.</b> {title}\n     <i>⏱ {duration}{who}</i>"
 
 
 # ── Download / delivery progress ──────────────────────────────────────────────

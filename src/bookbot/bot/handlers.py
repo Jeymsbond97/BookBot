@@ -32,8 +32,10 @@ from ..config import get_settings
 from ..providers import ai_meta, metadata, pdf_web, telegram_channels, youtube_audio
 from . import cards, delivery, ranking, textclean, texts
 from .keyboards import (
+    CAND_PAGE_SIZE,
     AdminCatCB,
     AdminLangCB,
+    CandPageCB,
     CardCB,
     CategoryCB,
     CatPageCB,
@@ -46,7 +48,7 @@ from .keyboards import (
     admin_categories_keyboard,
     admin_language_keyboard,
     browse_keyboard,
-    candidates_keyboard,
+    candidates_page_keyboard,
     card_keyboard,
     categories_keyboard,
     format_keyboard,
@@ -376,6 +378,13 @@ async def on_page(query: CallbackQuery, callback_data: PageCB, state: FSMContext
     await query.answer()
 
 
+# ── Fetched-variant pagination (channels / web PDF / YouTube) ─────────────────
+@router.callback_query(CandPageCB.filter())
+async def on_cand_page(query: CallbackQuery, callback_data: CandPageCB, state: FSMContext) -> None:
+    await _render_candidates(query.message, state, callback_data.kind, max(callback_data.page, 0))
+    await query.answer()
+
+
 # ── Cross-format offer accept ─────────────────────────────────────────────────
 @router.callback_query(OfferCB.filter())
 async def on_offer_accept(query: CallbackQuery, callback_data: OfferCB, state: FSMContext) -> None:
@@ -424,24 +433,18 @@ async def _search_channels(status: Message, state: FSMContext, query: str, fmt: 
         return False
     await state.update_data(
         cand_kind="tg",
+        cand_header=texts.channel_variants_header(query),
         candidates=[
             {"chat_id": c.chat_id, "message_id": c.message_id, "title": c.title,
              "size_bytes": c.size_bytes, "is_audio": c.is_audio,
              "duration": c.duration, "duration_str": c.duration_str,
-             "channel": c.channel, "caption": c.caption}
+             "channel": c.channel, "caption": c.caption,
+             "label": texts.channel_variant_label(
+                 c.title, c.size_mb, c.duration_str if c.is_audio else "")}
             for c in cands
         ],
     )
-    lines = [
-        texts.channel_variant_line(
-            i + 1, c.title, c.size_mb, c.duration_str if c.is_audio else ""
-        )
-        for i, c in enumerate(cands)
-    ]
-    await status.edit_text(
-        texts.channel_variants_header(query) + "\n\n" + "\n".join(lines),
-        reply_markup=candidates_keyboard("tg", len(cands), direct=True),
-    )
+    await _render_candidates(status, state, "tg", 0)
     return True
 
 
@@ -455,14 +458,14 @@ async def _search_web_pdf(status: Message, state: FSMContext, query: str) -> Non
         return
     await state.update_data(
         cand_kind="pdf",
-        candidates=[{"title": c.title, "url": c.url, "site": c.site} for c in cands],
+        cand_header=texts.pdf_variants_header(query),
+        candidates=[
+            {"title": c.title, "url": c.url, "site": c.site,
+             "label": texts.pdf_variant_label(c.title, c.site)}
+            for c in cands
+        ],
     )
-    lines = [texts.pdf_variant_line(i + 1, c.title, c.site) for i, c in enumerate(cands)]
-    await status.edit_text(
-        texts.pdf_variants_header(query) + "\n\n" + "\n".join(lines),
-        reply_markup=candidates_keyboard("pdf", len(cands), direct=True),
-        disable_web_page_preview=True,
-    )
+    await _render_candidates(status, state, "pdf", 0)
 
 
 # ── Internet search: YouTube audio variants ───────────────────────────────────
@@ -474,21 +477,16 @@ async def _search_youtube(status: Message, state: FSMContext, query: str) -> Non
         return
     await state.update_data(
         cand_kind="yt",
+        cand_header=texts.youtube_variants_header(query),
         candidates=[
             {"video_id": c.video_id, "title": c.title,
              "duration": c.duration, "duration_str": c.duration_str,
-             "uploader": c.uploader}
+             "uploader": c.uploader,
+             "label": texts.youtube_variant_label(c.title, c.duration_str, c.uploader)}
             for c in cands
         ],
     )
-    lines = [
-        texts.youtube_variant_line(i + 1, c.title, c.duration_str, c.uploader)
-        for i, c in enumerate(cands)
-    ]
-    await status.edit_text(
-        texts.youtube_variants_header(query) + "\n\n" + "\n".join(lines),
-        reply_markup=candidates_keyboard("yt", len(cands), direct=True),
-    )
+    await _render_candidates(status, state, "yt", 0)
 
 
 # ── Confirm handlers: download + deliver ──────────────────────────────────────
@@ -724,6 +722,30 @@ async def _enrich(title, author, *, description=None, cover_url=None, genre=None
         genre = genre or ai.genre
         author = author or ai.author
     return description, cover_url, genre, language, author
+
+
+async def _render_candidates(message: Message, state: FSMContext, kind: str, page: int) -> None:
+    """Show one page of fetched variants (numbered, with ◀/▶). Tapping a number
+    sends that variant straight away (one tap)."""
+    data = await state.get_data()
+    cands = data.get("candidates") or []
+    if not cands:
+        await message.answer(texts.NO_VARIANTS)
+        return
+    total = len(cands)
+    page = max(0, min(page, (total - 1) // CAND_PAGE_SIZE))
+    start = page * CAND_PAGE_SIZE
+    end = min(start + CAND_PAGE_SIZE, total)
+    lines = [f"<b>{i + 1}.</b> {cands[i].get('label', cands[i].get('title', ''))}"
+             for i in range(start, end)]
+    header = data.get("cand_header", "")
+    text = (header + "\n\n" if header else "") + "\n".join(lines)
+    kb = candidates_page_keyboard(kind, page, total)
+    await state.update_data(cand_page=page)
+    try:
+        await message.edit_text(text, reply_markup=kb, disable_web_page_preview=True)
+    except Exception:
+        await message.answer(text, reply_markup=kb, disable_web_page_preview=True)
 
 
 async def _render_results(message: Message, query: str, page: int, results, has_next,
