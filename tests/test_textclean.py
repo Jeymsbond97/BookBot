@@ -21,6 +21,13 @@ def test_clean_title_strips_pdf_and_brackets():
     assert textclean.clean_title("Sariq devni minib pdf") == "Sariq Devni Minib"
 
 
+def test_clean_title_strips_channel_tags():
+    # Telegram book channels watermark filenames with [@channel] tags.
+    assert textclean.clean_title("[@Mykitobbot] Lolazor.pdf") == "Lolazor"
+    assert textclean.clean_title("go'ro'g'li  [@kitob_pdf_yuklabot].pdf") == "Go'ro'g'li"
+    assert textclean.clean_title("Oybegim mening [@kitoblar_pdf].PDF") == "Oybegim Mening"
+
+
 def test_clean_title_empty():
     assert textclean.clean_title("") == ""
     assert textclean.clean_title(None) == ""

@@ -18,6 +18,9 @@ class BookFile:
     size_bytes: int | None = None
     telegram_file_id: str | None = None
     id: str | None = None
+    # Set for channel-sourced books: copy_message from this storage-channel message.
+    tg_chat_id: int | None = None
+    tg_msg_id: int | None = None
 
 
 @dataclass(slots=True)

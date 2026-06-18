@@ -105,7 +105,7 @@ def get_book_files(book_id: str) -> list[BookFile]:
     client = get_client()
     res = (
         client.table("book_files")
-        .select("id, format, storage_path, size_bytes, telegram_file_id")
+        .select("id, format, storage_path, size_bytes, telegram_file_id, tg_chat_id, tg_msg_id")
         .eq("book_id", book_id)
         .order("format")
         .execute()
@@ -117,6 +117,8 @@ def get_book_files(book_id: str) -> list[BookFile]:
             storage_path=row["storage_path"],
             size_bytes=row.get("size_bytes"),
             telegram_file_id=row.get("telegram_file_id"),
+            tg_chat_id=row.get("tg_chat_id"),
+            tg_msg_id=row.get("tg_msg_id"),
         )
         for row in (res.data or [])
     ]
@@ -127,7 +129,7 @@ def get_book_file(file_id: str) -> BookFile | None:
     client = get_client()
     res = (
         client.table("book_files")
-        .select("id, format, storage_path, size_bytes, telegram_file_id")
+        .select("id, format, storage_path, size_bytes, telegram_file_id, tg_chat_id, tg_msg_id")
         .eq("id", file_id)
         .limit(1)
         .execute()
@@ -141,6 +143,8 @@ def get_book_file(file_id: str) -> BookFile | None:
         storage_path=row["storage_path"],
         size_bytes=row.get("size_bytes"),
         telegram_file_id=row.get("telegram_file_id"),
+        tg_chat_id=row.get("tg_chat_id"),
+        tg_msg_id=row.get("tg_msg_id"),
     )
 
 
@@ -247,6 +251,43 @@ def save_audio_book(
             "format": "mp3",
             "youtube_id": youtube_id,
             "telegram_file_id": ",".join(telegram_file_ids) or None,
+            "size_bytes": size_bytes,
+        },
+        on_conflict="book_id,format",
+    ).execute()
+    return book_id
+
+
+def save_telegram_book(
+    title: str,
+    fmt: str,
+    *,
+    tg_chat_id: int,
+    tg_msg_id: int,
+    author: str | None = None,
+    language: str = "uz",
+    source_ref: str | None = None,
+    description: str | None = None,
+    cover_url: str | None = None,
+    size_bytes: int | None = None,
+) -> str:
+    """Persist a book whose file lives in a Telegram channel (NO Supabase upload).
+
+    Stores only the storage-channel message reference (tg_chat_id, tg_msg_id) so
+    the bot can re-serve it by copy_message — no size limit, no re-download.
+    Dedups by (title, language). Returns the book id.
+    """
+    client = get_client()
+    book_id = _upsert_book_row(
+        title, author=author, language=language, source="telegram",
+        source_ref=source_ref, description=description, cover_url=cover_url,
+    )
+    client.table("book_files").upsert(
+        {
+            "book_id": book_id,
+            "format": fmt,
+            "tg_chat_id": tg_chat_id,
+            "tg_msg_id": tg_msg_id,
             "size_bytes": size_bytes,
         },
         on_conflict="book_id,format",

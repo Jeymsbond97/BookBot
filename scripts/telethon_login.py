@@ -19,11 +19,29 @@ goes only into .env (gitignored). Never commit or share it.
 from __future__ import annotations
 
 import sys
+from getpass import getpass
 
 from telethon.sessions import StringSession
 from telethon.sync import TelegramClient
 
 from bookbot.config import get_settings
+
+
+def _ask_phone() -> str:
+    return input("Phone number (e.g. +99890...): ").strip()
+
+
+def _ask_code() -> str:
+    return input("Login CODE Telegram sent to the app (digits): ").strip()
+
+
+def _ask_password() -> str:
+    # This is the Two-Step Verification CLOUD password (Settings → Privacy and
+    # Security → Two-Step Verification) — NOT the SMS code.
+    print("\nThis account has Two-Step Verification (2FA) enabled.")
+    print("Enter the CLOUD PASSWORD you set in Telegram Settings → Privacy and")
+    print("Security → Two-Step Verification (NOT the SMS code).")
+    return getpass("2FA cloud password: ")
 
 
 def main() -> int:
@@ -35,7 +53,15 @@ def main() -> int:
     print("→ Logging in the FETCHER account (your 2nd/spare account).")
     print("  Use the phone number of the account joined to the book channels.\n")
 
-    with TelegramClient(StringSession(), s.telethon_api_id, s.telethon_api_hash) as client:
+    client = TelegramClient(StringSession(), s.telethon_api_id, s.telethon_api_hash)
+    try:
+        client.start(phone=_ask_phone, code_callback=_ask_code, password=_ask_password)
+    except Exception as exc:  # noqa: BLE001 — show a friendly hint, not a traceback
+        print(f"\n✗ Login failed: {exc}")
+        print("  If it was the password: that's the 2FA CLOUD password, not the SMS code.")
+        return 1
+
+    with client:
         me = client.get_me()
         session = client.session.save()
         print("\n✓ Logged in as:", me.first_name, f"(@{me.username})" if me.username else "")

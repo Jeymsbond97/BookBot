@@ -25,7 +25,9 @@ _TITLE_TAIL = re.compile(
 )
 # Bracketed prefixes like "[PDF]" / "(PDF)" and a bare trailing ".pdf"/" pdf".
 _BRACKET_PREFIX = re.compile(r"^\s*[\[(]\s*pdf\s*[\])]\s*", re.IGNORECASE)
-_PDF_SUFFIX = re.compile(r"\s*\.?\bpdf\b\s*$", re.IGNORECASE)
+_PDF_SUFFIX = re.compile(r"\s*\.?\b(pdf|epub|fb2|djvu|mp3)\b\s*$", re.IGNORECASE)
+# Channel watermark tags inside book filenames, e.g. "[@Mykitobbot]", "[@kitoblar_pdf]".
+_CHANNEL_TAG = re.compile(r"\[\s*@[^\]]*\]")
 
 
 def _title_word(w: str) -> str:
@@ -45,6 +47,7 @@ def clean_title(raw: str | None) -> str:
     if not raw:
         return ""
     t = raw.strip()
+    t = _CHANNEL_TAG.sub(" ", t)
     t = _BRACKET_PREFIX.sub("", t)
     t = _TITLE_TAIL.sub("", t)
     t = _PDF_SUFFIX.sub("", t)

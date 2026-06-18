@@ -76,7 +76,23 @@ async def deliver_book(message: Message, book_id: str, fmt: str) -> bool:
         except Exception:  # cached id may be stale (file deleted on Telegram side)
             log.warning("Cached file_id failed for book %s, falling back", book_id)
 
-    # 2) Download from Storage and upload to Telegram (PDF only for now — audio
+    # 2) Channel-sourced book → copy_message from our storage channel. This is
+    #    served straight off Telegram's servers (no re-upload), so it has no
+    #    50 MB cap and is instant — perfect for big audiobooks.
+    if target.tg_chat_id and target.tg_msg_id:
+        try:
+            await message.bot.copy_message(
+                chat_id=message.chat.id,
+                from_chat_id=target.tg_chat_id,
+                message_id=target.tg_msg_id,
+                caption=caption,
+            )
+            return True
+        except Exception:
+            log.warning("copy_message from storage failed for book %s", book_id)
+            # fall through to storage_path if any, else report missing below.
+
+    # 3) Download from Storage and upload to Telegram (PDF only for now — audio
     #    files are not stored; they arrive via the YouTube provider in Phase 5).
     if not target.storage_path:
         await message.answer(texts.FILE_MISSING)

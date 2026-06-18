@@ -29,7 +29,7 @@ from aiogram.types import CallbackQuery, ErrorEvent, Message
 from .. import db
 from ..categories import category_for_genre
 from ..config import get_settings
-from ..providers import ai_meta, metadata, pdf_web, youtube_audio
+from ..providers import ai_meta, metadata, pdf_web, telegram_channels, youtube_audio
 from . import cards, delivery, ranking, textclean, texts
 from .keyboards import (
     AdminCatCB,
@@ -342,7 +342,10 @@ async def on_text(message: Message, state: FSMContext) -> None:
                                   note=texts.cross_format_list_note(fmt))
         return
 
-    # 3) Nothing in the DB → search the internet for variants.
+    # 3) Nothing in the DB → try Telegram book channels first (fast, real files,
+    #    no size cap), then fall back to the open web / YouTube.
+    if await _search_channels(status, state, query, fmt):
+        return
     if fmt == "pdf":
         await _search_web_pdf(status, state, query)
     else:
@@ -397,10 +400,48 @@ async def on_send(query: CallbackQuery, callback_data: SendCB, state: FSMContext
     if kind == "db":
         data = await state.get_data()
         await delivery.deliver_book(query.message, ref, data.get("fmt", "pdf"))
+    elif kind == "tg":
+        await _send_channel(query.message, state, int(ref))
     elif kind == "pdf":
         await _send_web_pdf(query.message, state, int(ref))
     elif kind == "yt":
         await _send_youtube(query.message, state, int(ref))
+
+
+# ── Telegram channel search (preferred source) ────────────────────────────────
+async def _search_channels(status: Message, state: FSMContext, query: str, fmt: str) -> bool:
+    """Search the configured book channels. Returns True if it showed a variant
+    list (so the caller skips the web/YouTube fallback)."""
+    if not get_settings().telethon_enabled:
+        return False
+    await status.edit_text(texts.SEARCHING_CHANNELS)
+    try:
+        cands = await telegram_channels.search(query, fmt)
+    except Exception:
+        log.exception("Telegram channel search failed")
+        return False
+    if not cands:
+        return False
+    await state.update_data(
+        cand_kind="tg",
+        candidates=[
+            {"chat_id": c.chat_id, "message_id": c.message_id, "title": c.title,
+             "size_bytes": c.size_bytes, "is_audio": c.is_audio,
+             "duration": c.duration, "duration_str": c.duration_str, "channel": c.channel}
+            for c in cands
+        ],
+    )
+    lines = [
+        texts.channel_variant_line(
+            i + 1, c.title, c.size_mb, c.duration_str if c.is_audio else "", c.channel
+        )
+        for i, c in enumerate(cands)
+    ]
+    await status.edit_text(
+        texts.channel_variants_header(query) + "\n\n" + "\n".join(lines),
+        reply_markup=candidates_keyboard("tg", len(cands)),
+    )
+    return True
 
 
 # ── Internet search: PDF variants ─────────────────────────────────────────────
@@ -450,6 +491,51 @@ async def _search_youtube(status: Message, state: FSMContext, query: str) -> Non
 
 
 # ── Confirm handlers: download + deliver ──────────────────────────────────────
+async def _send_channel(message: Message, state: FSMContext, index: int) -> None:
+    """Forward the picked channel file into our storage channel, save its ref, and
+    deliver it to the user via copy_message (no size cap)."""
+    data = await state.get_data()
+    cands = data.get("candidates") or []
+    if not (0 <= index < len(cands)) or data.get("cand_kind") != "tg":
+        return
+    cand = cands[index]
+    fmt = "mp3" if cand.get("is_audio") else "pdf"
+    title = textclean.clean_title(data.get("query") or cand["title"]) or cand["title"]
+
+    status = await message.answer(texts.SENDING)
+    try:
+        storage_chat, storage_msg = await telegram_channels.forward_to_storage(
+            cand["chat_id"], cand["message_id"]
+        )
+    except Exception:
+        log.exception("Forward to storage channel failed")
+        await status.edit_text(texts.DOWNLOAD_FAILED)
+        return
+
+    # Reuse the meta the card already enriched (avoids a second AI call).
+    m = cand.get("meta") or {}
+    desc, cover, genre = m.get("description"), m.get("cover_url"), m.get("genre")
+    author, language = m.get("author"), m.get("language")
+    book_id = await asyncio.to_thread(
+        db.save_telegram_book,
+        title,
+        fmt,
+        tg_chat_id=storage_chat,
+        tg_msg_id=storage_msg,
+        author=author,
+        language=language or get_settings().default_language,
+        source_ref=cand.get("channel"),
+        description=desc,
+        cover_url=cover,
+        size_bytes=cand.get("size_bytes"),
+    )
+    slug = category_for_genre(genre)
+    if slug:
+        await asyncio.to_thread(db.set_book_category, book_id, slug)
+    await status.delete()
+    await delivery.deliver_book(message, book_id, fmt)
+
+
 async def _send_web_pdf(message: Message, state: FSMContext, index: int) -> None:
     data = await state.get_data()
     cands = data.get("candidates") or []
@@ -605,6 +691,28 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
         card = cards.build_card(
             title=title, fmt="pdf", author=author, language=language,
             description=desc, cover_url=cover, genre=genre, site=cand.get("site"),
+        )
+
+    elif kind == "tg":
+        cands = data.get("candidates") or []
+        idx = int(ref)
+        if not (0 <= idx < len(cands)):
+            await message.answer(texts.NOT_FOUND)
+            return
+        cand = cands[idx]
+        is_audio = bool(cand.get("is_audio"))
+        title = textclean.clean_title(query or cand["title"]) or cand["title"]
+        desc, cover, genre, language, author = await _enrich(title, None)
+        cand["meta"] = {"author": author, "language": language,
+                        "description": desc, "cover_url": cover, "genre": genre}
+        cands[idx] = cand
+        await state.update_data(candidates=cands)
+        card = cards.build_card(
+            title=title, fmt=("mp3" if is_audio else "pdf"), author=author,
+            language=language, description=desc, cover_url=cover, genre=genre,
+            duration=(cand.get("duration_str") if is_audio else None),
+            size_mb=cand.get("size_bytes", 0) / (1024 * 1024),
+            site=cand.get("channel"),
         )
 
     else:  # kind == "yt"
