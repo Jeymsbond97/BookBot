@@ -56,8 +56,12 @@ def build_card(
     site: str | None = None,
     genre: str | None = None,
     size_mb: float | None = None,
+    for_caption: bool = False,
 ) -> Card:
-    """Assemble a card caption + optional cover image url."""
+    """Assemble a card caption + optional cover image url.
+
+    ``for_caption=True`` clips the description to fit a Telegram media caption
+    (used when the text is attached directly to the delivered file)."""
     lines = [f"📖 <b>{title.strip()}</b>"]
     if author:
         lines.append(f"✍️ {author}")
@@ -86,6 +90,7 @@ def build_card(
 
     head = "\n".join(lines)
     if description:
-        room = _CAPTION_LIMIT - len(head) - 4 if cover_url else 3500 - len(head) - 4
+        capped = cover_url or for_caption
+        room = _CAPTION_LIMIT - len(head) - 4 if capped else 3500 - len(head) - 4
         head += "\n\n" + f"<i>{_clip(description, max(room, 0))}</i>"
     return Card(text=head, cover_url=cover_url)

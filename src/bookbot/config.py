@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     telethon_session: str = ""  # StringSession from scripts/telethon_login.py
     storage_channel_id: str = ""  # e.g. "-1001234567890"
     source_channels: str = ""  # comma-separated @usernames or -100… ids
+    # Rebrand fetched files: re-upload with a clean filename so NO source-channel
+    # watermark survives (a plain forward keeps the original embedded filename).
+    # Slower on a slow/throttled network (it moves the bytes), instant after caching;
+    # fast on a deployed server. False = instant forward (keeps the watermark name,
+    # caption still cleaned). Either way the source channel is never shown.
+    rebrand_files: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",

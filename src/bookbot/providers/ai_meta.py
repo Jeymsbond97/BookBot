@@ -23,13 +23,18 @@ from ..config import get_settings
 log = logging.getLogger(__name__)
 
 _SYSTEM = (
-    "Sen kitoblar bo'yicha bilimdon yordamchisan. Foydalanuvchi kitob nomini "
-    "(va ba'zan muallifini) beradi. Sen FAQAT JSON qaytarasan: "
-    '{"description": "...", "genre": "..."}. '
-    "description — kitob nima haqida ekanini 1-2 jumlada, sof o'zbek tilida, jozibali "
-    "tarzda yoz. genre — qisqa janr (masalan: Roman, Tarixiy roman, She'riyat, Badiiy, "
-    "Detektiv, Ilmiy, Diniy, Psixologiya, Biznes, Bolalar kitobi). "
-    "Agar kitobni aniq bilmasang, description va genre qiymatini null qil — to'qib chiqarma."
+    "Sen kitoblar bo'yicha bilimdon, sof o'zbek tilida yozadigan adabiy yordamchisan. "
+    "Foydalanuvchi kitob nomini (va ba'zan muallifini) beradi. Sen FAQAT JSON qaytarasan: "
+    '{"description": "...", "genre": "...", "author": "..."}. '
+    "description — kitob haqida 5-6 ta to'liq jumladan iborat, taqrizga o'xshash, qiziqarli "
+    "matn yoz: kitob nima haqida, asosiy mavzu va g'oyalari, kimga va nima uchun foydali, "
+    "nega o'qishga arziydi. Sof, ravon o'zbek tilida. "
+    "genre — qisqa janr (masalan: Roman, Tarixiy roman, She'riyat, Badiiy, Detektiv, Ilmiy, "
+    "Diniy, Psixologiya, Shaxsiy rivojlanish, Biznes, Bolalar kitobi). "
+    "author — muallifning to'liq ismi, agar ishonchli bilsang; bilmasang null. "
+    "Agar bu umuman kitob bo'lmasa (taqdimot, hujjat, referat), uchala qiymatni null qil. "
+    "Aks holda, kitob nomidan mavzusini anglab, foydali va aniq tavsif ber — to'qima ma'lumot "
+    "(aniq sana, tiraj, sahifa soni) yozma, umumiy mazmunga e'tibor qarat."
 )
 
 
@@ -37,6 +42,7 @@ _SYSTEM = (
 class AiMeta:
     description: str | None
     genre: str | None
+    author: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -59,8 +65,8 @@ def lookup(title: str, author: str | None = None) -> AiMeta | None:
                 {"role": "user", "content": f"Kitob: «{title}»{who}."},
             ],
             response_format={"type": "json_object"},
-            max_tokens=300,
-            timeout=30,
+            max_tokens=600,
+            timeout=40,
         )
         data = json.loads(resp.choices[0].message.content or "{}")
     except Exception:
@@ -69,6 +75,7 @@ def lookup(title: str, author: str | None = None) -> AiMeta | None:
 
     desc = (data.get("description") or "").strip() or None
     genre = (data.get("genre") or "").strip() or None
+    ai_author = (data.get("author") or "").strip() or None
     if not (desc or genre):
         return None
-    return AiMeta(description=desc, genre=genre)
+    return AiMeta(description=desc, genre=genre, author=ai_author)

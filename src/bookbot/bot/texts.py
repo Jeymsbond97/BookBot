@@ -145,24 +145,23 @@ FILE_MISSING = "⚠️ Bu kitobning tanlangan formatdagi fayli topilmadi."
 # ── Variants (internet candidates) ───────────────────────────────────────────
 SEARCHING_WEB_PDF = "🌐 Bazada yo'q — internetdan PDF variantlarini qidiryapman…"
 SEARCHING_YOUTUBE = "🎧 Bazada yo'q — YouTube'dan audio variantlarini qidiryapman…"
-SEARCHING_CHANNELS = "📡 Telegram kanallaridan qidiryapman…"
+SEARCHING_CHANNELS = "🔎 Qidiryapman…"
 
 
 def channel_variants_header(query: str) -> str:
     return (
-        f"📡 “{query}” bo'yicha Telegram kanallaridan topildi.\n"
-        "Birini tanlang 👇"
+        f"📚 “{query}” bo'yicha topildi.\n"
+        "Birini tanlang — to'g'ridan-to'g'ri yuboraman 👇"
     )
 
 
-def channel_variant_line(n: int, title: str, size_mb: float, duration: str, channel: str) -> str:
+def channel_variant_line(n: int, title: str, size_mb: float, duration: str) -> str:
+    """One variant line — NO source channel shown (looks like it's all ours)."""
     meta = []
     if duration:
         meta.append(f"⏱ {duration}")
     if size_mb:
         meta.append(f"📊 {size_mb:.1f} MB")
-    if channel:
-        meta.append(channel)
     tail = "  ·  ".join(meta)
     return f"<b>{n}.</b> {title}" + (f"\n     <i>{tail}</i>" if tail else "")
 

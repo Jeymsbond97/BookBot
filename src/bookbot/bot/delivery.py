@@ -22,7 +22,7 @@ from pathlib import Path
 from aiogram.types import BufferedInputFile, FSInputFile, Message
 
 from .. import db
-from . import texts
+from . import cards, texts
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,22 @@ def _safe_filename(title: str, ext: str) -> str:
     name = re.sub(r'[\\/:*?"<>|]+', " ", title).strip()
     name = re.sub(r"\s+", " ", name)[:80] or "kitob"
     return f"{name}.{ext}"
+
+
+def _rich_caption(book: dict | None, fmt: str, size_bytes: int | None = None) -> str | None:
+    """A full caption (title/author/meta + description) from the catalog row, for
+    files delivered by copy_message (where the description rides along with the file)."""
+    if not book:
+        return None
+    return cards.build_card(
+        title=book.get("title") or "",
+        fmt=fmt,
+        author=book.get("author"),
+        language=book.get("language"),
+        description=book.get("description"),
+        size_mb=(size_bytes / (1024 * 1024)) if size_bytes else None,
+        for_caption=True,
+    ).text
 
 
 def _caption(book: dict | None, fmt: str) -> str | None:
@@ -81,11 +97,14 @@ async def deliver_book(message: Message, book_id: str, fmt: str) -> bool:
     #    50 MB cap and is instant — perfect for big audiobooks.
     if target.tg_chat_id and target.tg_msg_id:
         try:
+            # Override the caption with our clean, rich text (title/author/meta +
+            # description) built from the catalog — this hides any source-channel
+            # caption on the instant-forward path and keeps it consistent on re-serve.
             await message.bot.copy_message(
                 chat_id=message.chat.id,
                 from_chat_id=target.tg_chat_id,
                 message_id=target.tg_msg_id,
-                caption=caption,
+                caption=_rich_caption(book, target.format, target.size_bytes),
             )
             return True
         except Exception:

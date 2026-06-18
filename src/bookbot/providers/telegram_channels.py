@@ -12,7 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 from rapidfuzz import fuzz
 from telethon import TelegramClient
@@ -176,11 +179,60 @@ async def search(
 
 
 async def forward_to_storage(chat_id: int, message_id: int) -> tuple[int, int]:
-    """Forward a found message into the private storage channel; return
-    (storage_chat_id, storage_message_id) for the bot to copy_message from."""
+    """FAST path: forward the file into the storage channel by reference (no bytes
+    moved → instant, any size). The source channel is hidden once the bot copies it
+    out, but the file keeps its original embedded filename (Telegram won't rename a
+    referenced file) — the caption is cleaned by the bot at copy time. Returns the
+    storage ref."""
     s = get_settings()
     client = await _get_client()
     storage = int(s.storage_channel_id)
     sent = await client.forward_messages(storage, message_id, chat_id)
     msg = sent[0] if isinstance(sent, list) else sent
     return storage, msg.id
+
+
+async def fetch_to_storage(
+    chat_id: int,
+    message_id: int,
+    *,
+    filename: str,
+    caption: str,
+    is_audio: bool,
+    title: str | None = None,
+    performer: str | None = None,
+    duration: int = 0,
+) -> tuple[int, int]:
+    """Download the source file and RE-UPLOAD it into our storage channel with a
+    clean filename + our own caption, so no source-channel watermark survives
+    (a plain forward/copy keeps the original embedded filename). The userbot has
+    no 50 MB cap, so this works for big audiobooks too. Returns the storage ref
+    (chat_id, message_id) for the bot to copy_message from.
+    """
+    s = get_settings()
+    client = await _get_client()
+    storage = int(s.storage_channel_id)
+    src = await client.get_messages(chat_id, ids=message_id)
+    workdir = Path(tempfile.mkdtemp(prefix="bookbot_tg_"))
+    try:
+        path = await client.download_media(src, file=str(workdir / "book"))
+        if not path:
+            raise RuntimeError("download_media returned no file")
+        attrs = [DocumentAttributeFilename(filename)]
+        if is_audio:
+            attrs.append(
+                DocumentAttributeAudio(
+                    duration=duration or 0, title=title, performer=performer
+                )
+            )
+        sent = await client.send_file(
+            storage,
+            path,
+            caption=caption,
+            parse_mode="html",
+            force_document=not is_audio,
+            attributes=attrs,
+        )
+        return storage, sent.id
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)

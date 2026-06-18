@@ -433,13 +433,13 @@ async def _search_channels(status: Message, state: FSMContext, query: str, fmt: 
     )
     lines = [
         texts.channel_variant_line(
-            i + 1, c.title, c.size_mb, c.duration_str if c.is_audio else "", c.channel
+            i + 1, c.title, c.size_mb, c.duration_str if c.is_audio else ""
         )
         for i, c in enumerate(cands)
     ]
     await status.edit_text(
         texts.channel_variants_header(query) + "\n\n" + "\n".join(lines),
-        reply_markup=candidates_keyboard("tg", len(cands)),
+        reply_markup=candidates_keyboard("tg", len(cands), direct=True),
     )
     return True
 
@@ -492,30 +492,48 @@ async def _search_youtube(status: Message, state: FSMContext, query: str) -> Non
 
 # ── Confirm handlers: download + deliver ──────────────────────────────────────
 async def _send_channel(message: Message, state: FSMContext, index: int) -> None:
-    """Forward the picked channel file into our storage channel, save its ref, and
-    deliver it to the user via copy_message (no size cap)."""
+    """One-tap delivery of a channel result: enrich → re-upload into storage with a
+    clean filename + rich caption (no source watermark) → save → deliver."""
     data = await state.get_data()
     cands = data.get("candidates") or []
     if not (0 <= index < len(cands)) or data.get("cand_kind") != "tg":
         return
     cand = cands[index]
-    fmt = "mp3" if cand.get("is_audio") else "pdf"
+    is_audio = bool(cand.get("is_audio"))
+    fmt = "mp3" if is_audio else "pdf"
     title = textclean.clean_title(data.get("query") or cand["title"]) or cand["title"]
 
     status = await message.answer(texts.SENDING)
+
+    # AI tasnif (5-6 jumla) + author/genre/language/cover — attached to the file.
+    desc, cover, genre, language, author = await _enrich(title, None)
+    language = language or get_settings().default_language
+    size_mb = (cand.get("size_bytes") or 0) / (1024 * 1024)
+    caption = cards.build_card(
+        title=title, fmt=fmt, author=author, language=language, description=desc,
+        genre=genre, size_mb=size_mb,
+        duration=(cand.get("duration_str") if is_audio else None),
+        for_caption=True,
+    ).text
     try:
-        storage_chat, storage_msg = await telegram_channels.forward_to_storage(
-            cand["chat_id"], cand["message_id"]
-        )
+        if get_settings().rebrand_files:
+            # Clean filename (re-upload). Slower on a slow network, instant after.
+            filename = delivery._safe_filename(title, "mp3" if is_audio else "pdf")
+            storage_chat, storage_msg = await telegram_channels.fetch_to_storage(
+                cand["chat_id"], cand["message_id"],
+                filename=filename, caption=caption, is_audio=is_audio,
+                title=title, performer=author, duration=cand.get("duration") or 0,
+            )
+        else:
+            # Instant forward (keeps original filename; caption cleaned at copy time).
+            storage_chat, storage_msg = await telegram_channels.forward_to_storage(
+                cand["chat_id"], cand["message_id"],
+            )
     except Exception:
-        log.exception("Forward to storage channel failed")
+        log.exception("Channel fetch→storage failed")
         await status.edit_text(texts.DOWNLOAD_FAILED)
         return
 
-    # Reuse the meta the card already enriched (avoids a second AI call).
-    m = cand.get("meta") or {}
-    desc, cover, genre = m.get("description"), m.get("cover_url"), m.get("genre")
-    author, language = m.get("author"), m.get("language")
     book_id = await asyncio.to_thread(
         db.save_telegram_book,
         title,
@@ -523,8 +541,7 @@ async def _send_channel(message: Message, state: FSMContext, index: int) -> None
         tg_chat_id=storage_chat,
         tg_msg_id=storage_msg,
         author=author,
-        language=language or get_settings().default_language,
-        source_ref=cand.get("channel"),
+        language=language,
         description=desc,
         cover_url=cover,
         size_bytes=cand.get("size_bytes"),
@@ -693,28 +710,6 @@ async def _show_card(message: Message, state: FSMContext, kind: str, ref: str) -
             description=desc, cover_url=cover, genre=genre, site=cand.get("site"),
         )
 
-    elif kind == "tg":
-        cands = data.get("candidates") or []
-        idx = int(ref)
-        if not (0 <= idx < len(cands)):
-            await message.answer(texts.NOT_FOUND)
-            return
-        cand = cands[idx]
-        is_audio = bool(cand.get("is_audio"))
-        title = textclean.clean_title(query or cand["title"]) or cand["title"]
-        desc, cover, genre, language, author = await _enrich(title, None)
-        cand["meta"] = {"author": author, "language": language,
-                        "description": desc, "cover_url": cover, "genre": genre}
-        cands[idx] = cand
-        await state.update_data(candidates=cands)
-        card = cards.build_card(
-            title=title, fmt=("mp3" if is_audio else "pdf"), author=author,
-            language=language, description=desc, cover_url=cover, genre=genre,
-            duration=(cand.get("duration_str") if is_audio else None),
-            size_mb=cand.get("size_bytes", 0) / (1024 * 1024),
-            site=cand.get("channel"),
-        )
-
     else:  # kind == "yt"
         cands = data.get("candidates") or []
         idx = int(ref)
@@ -778,6 +773,7 @@ async def _enrich(title, author, *, description=None, cover_url=None, genre=None
     if ai:
         description = description or ai.description
         genre = genre or ai.genre
+        author = author or ai.author
     return description, cover_url, genre, language, author
 
 
