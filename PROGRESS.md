@@ -240,6 +240,54 @@ Addresses the 4 issues raised after testing:
 > User wants ours to be **even better**. Tomorrow: fix the card bugs first, then redesign the
 > card, then build feature parity + our edge (auto-fetch from the web, which MyKitobBot lacks).
 
+> 🛰 **Bigger direction (2026-06-18): Telegram-first fetch (Phase T below), to do BEFORE 9c.**
+> User's real pain with the current web/YouTube fetch: (1) web search is slow; (2) many sites
+> only allow on-site read/listen (no downloadable file); (3) YouTube audio = download + split
+> = slow/clunky; (4) the 50 MB bot cap blocks 5-hour, 200–300 MB audiobooks. Plan: search
+> **other Telegram book channels first** via a Telethon **user account** (joined to those
+> channels), **forward** the found file into our **private storage channel** (forward/copy has
+> NO 50 MB limit — up to 2 GB, no re-upload), and the **bot copies it to the user** instantly,
+> then we save the (channel, message) ref + AI meta so next time is instant. Web/YouTube become
+> the last-resort fallback. **All of 9c/9d (profiles, likes, /top*, AI chat, community) still
+> apply unchanged** — file source is a separate layer.
+
+### 🛰 Phase T — Telegram-first fetch (Telethon) ← _IN PROGRESS (do before 9c)_
+
+**Why Telethon:** the Bot API can't search channel contents and can't send >50 MB by upload.
+A **user account** (Telethon/MTProto) can search joined channels and move 2 GB files; the bot
+delivers via `copy_message` from a shared storage channel (no re-upload → no size limit).
+
+**Architecture (hybrid, additive — aiogram stays the front-end):**
+- **1st account** (owns @jeymsbooks_bot): bot admin + admin of the storage channel.
+- **2nd/spare account** = Telethon **userbot**: joined to all book channels; searches them;
+  forwards a found file into the private **storage channel**.
+- **Bot**: `copy_message(from=storage_channel, msg_id)` → user (instant, 2 GB-capable).
+- New search waterfall: **DB → Telegram channels (NEW) → web PDF / YouTube (fallback)**.
+
+**Done so far (2026-06-18):**
+- `telethon>=1.36` added to `pyproject.toml` + installed in venv (1.44.0).
+- `config.py`: `telethon_api_id/api_hash/session`, `storage_channel_id`, `source_channels`
+  (+ `source_channel_list`, `telethon_enabled` props). `.env` + `.env.example` documented.
+- **api_id/api_hash filled** in `.env` (created on the 2nd account, via my.telegram.org).
+- `scripts/telethon_login.py` — one-time interactive login → prints a `TELETHON_SESSION`
+  StringSession to paste into `.env` (so the bot logs in non-interactively after).
+- 37 tests pass; ruff clean.
+
+**Next steps (need the user — interactive / Telegram-side):**
+1. ⏳ User runs `python scripts/telethon_login.py` with the 2nd account (phone + code) →
+   pastes `TELETHON_SESSION=…` back; we put it in `.env`.
+2. ⏳ User creates a **private channel** ("BookBot Storage"), adds @jeymsbooks_bot as admin +
+   the 2nd account; we read its `-100…` id into `STORAGE_CHANNEL_ID`.
+3. ⏳ User sends the **book-channel list** (2nd account must be joined) → `SOURCE_CHANNELS`.
+4. Then build `providers/telegram_channels.py` (search joined channels by title, pick best
+   match, forward into storage, return a deliverable ref) + a `delivery.copy_from_storage()`
+   path + wire it into `handlers.on_text` as the step-2 source before web/YouTube.
+5. Extend `book_files` to store `(storage_chat_id, storage_msg_id)` for instant re-serve.
+
+**Caveats:** userbot = against Telegram ToS in theory (use the SPARE account; it may get
+limited). No global channel search — we curate `SOURCE_CHANNELS`. Session string is
+password-grade (gitignored only).
+
 ### ✅ Phase 9a — Card bug fixes (DONE, 2026-06-18)
 
 New pure module `src/bookbot/bot/textclean.py` (+ `tests/test_textclean.py`) fixes

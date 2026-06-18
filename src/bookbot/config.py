@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     # (e.g. "socks5://127.0.0.1:1080" or "http://user:pass@host:port"). Empty = direct.
     telegram_proxy: str = ""
 
+    # ── Telethon "fetcher" (user account) — finds books in Telegram channels and
+    # forwards big files (up to 2 GB) into a private storage channel the bot copies
+    # from. All optional: if api_id/session/storage are unset, the channel provider
+    # is simply skipped and the bot falls back to web/YouTube as before.
+    telethon_api_id: int = 0
+    telethon_api_hash: str = ""
+    telethon_session: str = ""  # StringSession from scripts/telethon_login.py
+    storage_channel_id: str = ""  # e.g. "-1001234567890"
+    source_channels: str = ""  # comma-separated @usernames or -100… ids
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -52,6 +62,22 @@ class Settings(BaseSettings):
 
     def is_admin(self, user_id: int) -> bool:
         return user_id in self.admin_id_list
+
+    @property
+    def source_channel_list(self) -> list[str]:
+        """Parse SOURCE_CHANNELS ('@a,@b,-100…') into a list of channel refs."""
+        return [c.strip() for c in self.source_channels.split(",") if c.strip()]
+
+    @property
+    def telethon_enabled(self) -> bool:
+        """True only when the Telethon fetcher is fully configured (api creds +
+        a logged-in session + a storage channel to forward into)."""
+        return bool(
+            self.telethon_api_id
+            and self.telethon_api_hash
+            and self.telethon_session
+            and self.storage_channel_id
+        )
 
 
 _settings: Settings | None = None
