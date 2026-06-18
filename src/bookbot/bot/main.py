@@ -17,6 +17,9 @@ from .handlers import router
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    # Telethon spams benign reconnect / "wrong session ID" warnings on a throttled
+    # network (the userbot still works) — keep only real errors.
+    logging.getLogger("telethon").setLevel(logging.ERROR)
     settings = get_settings()
 
     # Uploading audio (tens of MB) over a slow link can take minutes — the default

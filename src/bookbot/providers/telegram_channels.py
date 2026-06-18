@@ -68,7 +68,14 @@ async def _get_client() -> TelegramClient:
         s = get_settings()
         if _client is None:
             _client = TelegramClient(
-                StringSession(s.telethon_session), s.telethon_api_id, s.telethon_api_hash
+                StringSession(s.telethon_session),
+                s.telethon_api_id,
+                s.telethon_api_hash,
+                # The fetcher only makes requests (search/download/upload); it never
+                # needs the update stream. Disabling it removes the background
+                # catch-up connection that churns + spams "wrong session ID" on a
+                # slow/throttled network.
+                receive_updates=False,
             )
         if not _client.is_connected():
             await _client.connect()
