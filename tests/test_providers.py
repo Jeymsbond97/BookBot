@@ -112,11 +112,17 @@ def test_build_card_shows_size():
     assert "📊 6.9 MB" in card.text
 
 
-def test_build_card_badges_on_one_line():
+def test_build_card_language_on_own_line():
     card = cards.build_card(title="X", fmt="pdf", genre="Diniy", language="uz")
-    # genre · language · format collapse into a single line.
-    badge_line = next(ln for ln in card.text.splitlines() if "🏷" in ln)
-    assert "🏷 Diniy" in badge_line and "🌐" in badge_line and "📄 PDF" in badge_line
+    lines = card.text.splitlines()
+    genre_line = next(ln for ln in lines if "🏷" in ln)
+    lang_line = next(ln for ln in lines if "🌐" in ln)
+    facts_line = next(ln for ln in lines if "📄 PDF" in ln)
+    # Genre, language and the file-facts line are all separate (language NOT next
+    # to the format).
+    assert "Diniy" in genre_line and "🌐" not in genre_line
+    assert "O'zbekcha" in lang_line and "📄" not in lang_line
+    assert "🌐" not in facts_line
 
 
 def test_build_card_clips_long_description():

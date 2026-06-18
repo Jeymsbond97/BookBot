@@ -65,25 +65,20 @@ def build_card(
     lines = [f"📖 <b>{title.strip()}</b>"]
     if author:
         lines.append(f"✍️ {author}")
-
-    # One tidy line: genre · language · format (in that fixed order, skip empties).
-    badges = []
+    # Genre and language each on their own line (kept separate from the file info).
     if genre:
-        badges.append(f"🏷 {genre}")
+        lines.append(f"🏷 {genre}")
     if language:
-        badges.append(f"🌐 {_LANG.get(language, language)}")
-    badges.append(_FMT.get(fmt, fmt))
-    lines.append("  ·  ".join(badges))
+        lines.append(f"🌐 {_LANG.get(language, language)}")
 
-    # A second stats line: duration (audio) · size, only if present.
-    stats = []
+    # File facts together on one line: format · duration (audio) · size.
+    facts = [_FMT.get(fmt, fmt)]
     if duration:
-        stats.append(f"⏱ {duration}")
+        facts.append(f"⏱ {duration}")
     size = _fmt_size(size_mb)
     if size:
-        stats.append(f"📊 {size}")
-    if stats:
-        lines.append("   ·   ".join(stats))
+        facts.append(f"📊 {size}")
+    lines.append("  ·  ".join(facts))
 
     if site:
         lines.append(f"🔗 {site}")
