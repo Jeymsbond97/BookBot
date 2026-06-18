@@ -290,6 +290,19 @@ delivers via `copy_message` from a shared storage channel (no re-upload → no s
 - ✅ Live-verified headlessly: search "Lolazor" (pdf) → 1 candidate (20 MB) → forwarded into
   storage (msg_id=2). 43 tests pass; ruff clean.
 
+**UX fixes after first live test (2026-06-18):**
+- Source channel hidden everywhere: neutral "🔎 Qidiryapman…", variant list/caption
+  no longer show `@channel`.
+- One-tap: channel variant buttons deliver directly (no card→confirm step); the AI
+  description rides in the file caption (`cards.build_card(for_caption=True)`).
+- Richer AI: `ai_meta` now returns a 5-6 sentence Uzbek review-style description +
+  author; `_enrich` fills author from AI.
+- Rebrand toggle `REBRAND_FILES`: true = re-upload with clean filename (no `[@channel]`
+  tag; slow on a throttled net ~2 min/20 MB, fast on a server, cached after); **false
+  (current)** = instant forward (filename keeps tag, caption cleaned by the bot's
+  `copy_message` via `delivery._rich_caption`). User chose false for now → flip to true
+  on deploy. `cryptg` added (crypto wasn't the bottleneck — local bandwidth is).
+
 **Remaining (user, then live test):**
 1. ⏳ **Run migration `0003_telegram_files.sql` in Supabase SQL Editor** (adds tg_chat_id/
    tg_msg_id) — `save_telegram_book` fails until this is done.
