@@ -3,7 +3,7 @@
 > 🇺🇿 Bu fayl — qayerga kelganimiz va nima qolganini ko'rsatadi. Ertaga shu yerdan davom etamiz.
 > To'liq loyiha tavsifi: **README.md**. Bosqichlar ro'yxati: README §16 (Build Roadmap).
 
-_Last updated: 2026-06-18 (Phase 9a card bug fixes + 9b card redesign done; next: 9c feature parity)_
+_Last updated: 2026-06-18 (9a/9b cards done; Phase T Telegram-first fetch BUILT — needs migration 0003 + live test; then 9c)_
 
 ### 🔧 PDF fetch reliability fixes (2026-06-17)
 
@@ -251,7 +251,7 @@ Addresses the 4 issues raised after testing:
 > the last-resort fallback. **All of 9c/9d (profiles, likes, /top*, AI chat, community) still
 > apply unchanged** — file source is a separate layer.
 
-### 🛰 Phase T — Telegram-first fetch (Telethon) ← _IN PROGRESS (do before 9c)_
+### 🛰 Phase T — Telegram-first fetch (Telethon) ← _BUILT; awaiting migration 0003 + live test_
 
 **Why Telethon:** the Bot API can't search channel contents and can't send >50 MB by upload.
 A **user account** (Telethon/MTProto) can search joined channels and move 2 GB files; the bot
@@ -273,20 +273,34 @@ delivers via `copy_message` from a shared storage channel (no re-upload → no s
   StringSession to paste into `.env` (so the bot logs in non-interactively after).
 - 37 tests pass; ruff clean.
 
-**Next steps (need the user — interactive / Telegram-side):**
-1. ⏳ User runs `python scripts/telethon_login.py` with the 2nd account (phone + code) →
-   pastes `TELETHON_SESSION=…` back; we put it in `.env`.
-2. ⏳ User creates a **private channel** ("BookBot Storage"), adds @jeymsbooks_bot as admin +
-   the 2nd account; we read its `-100…` id into `STORAGE_CHANNEL_ID`.
-3. ⏳ User sends the **book-channel list** (2nd account must be joined) → `SOURCE_CHANNELS`.
-4. Then build `providers/telegram_channels.py` (search joined channels by title, pick best
-   match, forward into storage, return a deliverable ref) + a `delivery.copy_from_storage()`
-   path + wire it into `handlers.on_text` as the step-2 source before web/YouTube.
-5. Extend `book_files` to store `(storage_chat_id, storage_msg_id)` for instant re-serve.
+**Done (2026-06-18, build):**
+- ✅ Login: `scripts/telethon_login.py` run on the 2nd account (@jeyms_bond97, id 1337366854);
+  `TELETHON_SESSION` in `.env`. 2FA was on — login script clarifies the cloud-password prompt.
+- ✅ Storage channel: `scripts/telethon_setup_storage.py` created "BookBot Storage"
+  (`STORAGE_CHANNEL_ID=-1004452005575`) and made @jeymsbooks_bot admin (bots can't be invited
+  to a broadcast channel — `EditAdminRequest` adds them directly).
+- ✅ `SOURCE_CHANNELS=@Online_kutubxonala,@kitoblar_pdf` (the two book channels the account was
+  already in — both PDF; no audiobook channel joined yet).
+- ✅ `providers/telegram_channels.py`: async shared Telethon client; `search(query, fmt)`
+  (server-side `iter_messages(search=…)` per channel, rapidfuzz-ranked, deduped) +
+  `forward_to_storage()`. `delivery.deliver_book` copies from storage (no 50MB cap).
+  `db.save_telegram_book` + `book_files.tg_chat_id/tg_msg_id` (migration `0003`). Waterfall in
+  `handlers.on_text`: DB → Telegram channels → web/YouTube. 'tg' candidate kind reuses the
+  variant-list → card → send flow. `telethon_enabled` is True.
+- ✅ Live-verified headlessly: search "Lolazor" (pdf) → 1 candidate (20 MB) → forwarded into
+  storage (msg_id=2). 43 tests pass; ruff clean.
+
+**Remaining (user, then live test):**
+1. ⏳ **Run migration `0003_telegram_files.sql` in Supabase SQL Editor** (adds tg_chat_id/
+   tg_msg_id) — `save_telegram_book` fails until this is done.
+2. ⏳ Restart bot → in Telegram: PDF mode → "Lolazor" → channel variant → card → 📥 → arrives;
+   2nd search served instantly from DB.
+3. ⏳ Join an **audiobook channel** with the 2nd account → add its @username to `SOURCE_CHANNELS`
+   → big audiobooks deliver instantly via copy (no split, no 50MB cap).
 
 **Caveats:** userbot = against Telegram ToS in theory (use the SPARE account; it may get
 limited). No global channel search — we curate `SOURCE_CHANNELS`. Session string is
-password-grade (gitignored only).
+password-grade (gitignored only). After this, proceed to **9c** (profiles/likes/`/top*`).
 
 ### ✅ Phase 9a — Card bug fixes (DONE, 2026-06-18)
 
